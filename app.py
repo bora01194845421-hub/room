@@ -25,27 +25,29 @@ st.divider()
 # ──────────────────────────────────────────────
 # API 키 자동 로드 (우선순위: st.secrets > 환경변수 > .env 파일)
 # ──────────────────────────────────────────────
+from config import ANTHROPIC_API_KEY as _ANT_KEY, OPENAI_API_KEY as _OAI_KEY
+
+# 환경변수에 키 등록 (Secrets > config 순서)
 def _load_api_key() -> str:
-    # 1) Streamlit Cloud Secrets
     try:
         return st.secrets["ANTHROPIC_API_KEY"]
     except Exception:
         pass
-    # 2) 환경변수
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return os.environ["ANTHROPIC_API_KEY"]
-    # 3) .env 파일 (로컬 개발용)
-    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
-    if os.path.exists(env_path):
-        with open(env_path) as f:
-            for line in f:
-                if line.startswith("ANTHROPIC_API_KEY="):
-                    return line.strip().split("=", 1)[1]
-    return ""
+    return os.environ.get("ANTHROPIC_API_KEY", _ANT_KEY)
+
+def _load_oai_key() -> str:
+    try:
+        return st.secrets["OPENAI_API_KEY"]
+    except Exception:
+        pass
+    return os.environ.get("OPENAI_API_KEY", _OAI_KEY)
 
 api_key = _load_api_key()
+oai_key = _load_oai_key()
 if api_key:
     os.environ["ANTHROPIC_API_KEY"] = api_key
+if oai_key:
+    os.environ["OPENAI_API_KEY"] = oai_key
 
 # ──────────────────────────────────────────────
 # 사이드바
