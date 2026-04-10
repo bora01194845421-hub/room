@@ -5,6 +5,7 @@ import sys
 import os
 import math
 import tempfile
+import io
 import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -18,54 +19,31 @@ st.set_page_config(
     layout="wide",
 )
 
+# ──────────────────────────────────────────────
+# API 키 로드 (config에 내장 → Secrets 우선)
+# ──────────────────────────────────────────────
+ANTHROPIC_API_KEY = "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"
+OPENAI_API_KEY    = "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"
+
+try:
+    ANTHROPIC_API_KEY = st.secrets.get("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY)
+    OPENAI_API_KEY    = st.secrets.get("OPENAI_API_KEY",    OPENAI_API_KEY)
+except Exception:
+    pass
+
+os.environ["ANTHROPIC_API_KEY"] = ANTHROPIC_API_KEY
+os.environ["OPENAI_API_KEY"]    = OPENAI_API_KEY
+
+# ──────────────────────────────────────────────
+# UI
+# ──────────────────────────────────────────────
 st.title("🏛️ 수원시정연구원 G룸 에이전트")
 st.caption("회의 음성/텍스트 → 전사 → 회의록 → 맥락 분석 → 초정밀 프롬프트 → CEO 브리핑")
 st.divider()
 
-# ──────────────────────────────────────────────
-# API 키 자동 로드 (우선순위: st.secrets > 환경변수 > .env 파일)
-# ──────────────────────────────────────────────
-from config import ANTHROPIC_API_KEY as _ANT_KEY, OPENAI_API_KEY as _OAI_KEY
-
-# 환경변수에 키 등록 (Secrets > config 순서)
-def _load_api_key() -> str:
-    try:
-        return st.secrets["ANTHROPIC_API_KEY"]
-    except Exception:
-        pass
-    return os.environ.get("ANTHROPIC_API_KEY", _ANT_KEY)
-
-def _load_oai_key() -> str:
-    try:
-        return st.secrets["OPENAI_API_KEY"]
-    except Exception:
-        pass
-    return os.environ.get("OPENAI_API_KEY", _OAI_KEY)
-
-api_key = _load_api_key()
-oai_key = _load_oai_key()
-if api_key:
-    os.environ["ANTHROPIC_API_KEY"] = api_key
-if oai_key:
-    os.environ["OPENAI_API_KEY"] = oai_key
-
-# ──────────────────────────────────────────────
-# 사이드바
-# ──────────────────────────────────────────────
 with st.sidebar:
     st.header("⚙️ 설정")
-    if api_key:
-        st.success("API Key 로드됨 ✅")
-    else:
-        manual_key = st.text_input(
-            "Anthropic API Key",
-            type="password",
-            help="sk-ant-... 형식의 API 키를 입력하세요",
-        )
-        if manual_key:
-            api_key = manual_key
-            os.environ["ANTHROPIC_API_KEY"] = api_key
-
+    st.success("API Key 로드됨 ✅")
     st.divider()
     st.markdown("**파이프라인 구조**")
     st.markdown("""
@@ -86,8 +64,8 @@ audio_ext   = "wav"
 text_input  = ""
 
 with tab_rec:
-    st.markdown("🎙️ 아래 버튼을 눌러 **녹음 시작**, 다시 눌러 **종료**하세요.")
-    st.caption("마이크 권한 허용 후 사용하세요. 긴 회의도 녹음 가능합니다.")
+    st.markdown("🎙️ 버튼을 눌러 **녹음 시작**, 다시 눌러 **종료**하세요.")
+    st.caption("마이크 권한을 허용해주세요.")
     recorded = st.audio_input("녹음하기", label_visibility="collapsed")
     if recorded:
         audio_bytes = recorded.read()
@@ -95,7 +73,7 @@ with tab_rec:
         size_mb = len(audio_bytes) / (1024 * 1024)
         st.success(f"녹음 완료 ({size_mb:.1f} MB)")
         if size_mb > 20:
-            st.info(f"파일이 커서 자동으로 나눠서 전사합니다 ({math.ceil(size_mb/20)}개 청크)")
+            st.info(f"자동으로 {math.ceil(size_mb/20)}개로 나눠서 전사합니다.")
 
 with tab_file:
     uploaded = st.file_uploader("m4a / mp3 / wav 파일 선택", type=["m4a", "mp3", "wav"])
@@ -117,84 +95,247 @@ st.divider()
 # ──────────────────────────────────────────────
 # 실행 버튼
 # ──────────────────────────────────────────────
-has_input    = bool(audio_bytes) or bool(text_input.strip())
-run_disabled = not api_key or not has_input
+has_input = bool(audio_bytes) or bool(text_input.strip())
 
-if not api_key:
-    st.warning("API Key가 설정되지 않았습니다. 사이드바에서 입력해주세요.")
-elif not has_input:
+if not has_input:
     st.info("녹음하거나 파일을 업로드하거나 텍스트를 입력해주세요.")
 
-if st.button("🚀 파이프라인 실행", disabled=run_disabled, use_container_width=True, type="primary"):
+if st.button("🚀 파이프라인 실행", disabled=not has_input, use_container_width=True, type="primary"):
 
-    try:
-        from agents.context_analyzer import ContextAnalyzerAgent
-        from agents.prompt_generator import UltraPromptGeneratorAgent
-        from agents.ceo_briefing import CEOBriefingAgent
-        from agents.minutes_writer import MinutesWriterAgent
-    except ImportError as e:
-        st.error(f"에이전트 임포트 오류: {e}")
-        st.stop()
+    import anthropic
+    import json
+    from docx import Document
+    from docx.shared import Pt, Cm
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from datetime import datetime
 
     results = {}
 
     # ── Step 1: 전사 ──────────────────────────────
     with st.status("**[1/5] 음성 전사 중...**", expanded=True) as status:
         if audio_bytes:
-            try:
-                from agents.transcriber import TranscriberAgent
-            except ImportError as e:
-                st.error(f"Transcriber 임포트 오류: {e}")
-                st.stop()
+            from openai import OpenAI
+            oai = OpenAI(api_key=OPENAI_API_KEY)
             with tempfile.NamedTemporaryFile(suffix=f".{audio_ext}", delete=False) as tmp:
                 tmp.write(audio_bytes)
                 tmp_path = tmp.name
             try:
-                result = TranscriberAgent().run(tmp_path)
-                transcript = result["transcript"]
-                st.write(f"✓ 전사 완료 ({result['duration']:.0f}초, 언어: {result['language']})")
+                with open(tmp_path, "rb") as f:
+                    resp = oai.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=f,
+                        language="ko",
+                    )
+                transcript = resp.text.strip()
+                st.write(f"✓ 전사 완료 ({len(transcript):,}자)")
             finally:
                 os.unlink(tmp_path)
         else:
             transcript = text_input.strip()
-            st.write(f"✓ 텍스트 입력 사용 ({len(transcript):,}자)")
+            st.write(f"✓ 텍스트 입력 ({len(transcript):,}자)")
         results["transcript"] = transcript
         status.update(label="**[1/5] 전사 완료** ✅", state="complete")
 
-    # ── Step 2: 맥락 분석 (회의록 작성 전에 주제 파악) ──
+    # ── Step 2: 맥락 분석 ─────────────────────────
     with st.status("**[2/5] 맥락 분석 중...**", expanded=True) as status:
-        context = ContextAnalyzerAgent().run(transcript)
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-opus-4-5",
+            max_tokens=2000,
+            messages=[{"role": "user", "content": f"""수원시정연구원 정책 연구 전문가로서 아래 텍스트를 분석해 JSON으로 반환하세요.
+
+[전사 텍스트]
+{transcript[:4000]}
+
+{{
+  "main_topic": "핵심 주제 1문장",
+  "research_questions": ["연구질문1","연구질문2"],
+  "key_issues": ["이슈1","이슈2","이슈3"],
+  "policy_context": "정책 맥락 2-3문장",
+  "keywords": ["키워드1","키워드2","키워드3","키워드4","키워드5"],
+  "stakeholders": ["이해관계자1","이해관계자2"],
+  "region_specificity": "수원시 특수성",
+  "suggested_report_title": "보고서 제목 초안"
+}}
+
+JSON만 반환하세요."""}]
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"): raw = raw[4:]
+        try:
+            context = json.loads(raw.strip())
+        except Exception:
+            context = {"main_topic": transcript[:50], "keywords": [], "key_issues": [],
+                       "research_questions": [], "policy_context": "", "stakeholders": [],
+                       "region_specificity": "", "suggested_report_title": "정책 연구"}
         results["context"] = context
-        st.write(f"✓ 주제: {context.get('main_topic', '?')}")
-        st.write(f"✓ 키워드: {', '.join(context.get('keywords', [])[:6])}")
+        st.write(f"✓ 주제: {context.get('main_topic','?')}")
         status.update(label="**[2/5] 맥락 분석 완료** ✅", state="complete")
 
     # ── Step 3: 회의록 작성 ──────────────────────────
     with st.status("**[3/5] 회의록 작성 중...**", expanded=True) as status:
-        minutes_path, minutes_bytes = MinutesWriterAgent().run(transcript, context)
-        results["minutes_path"]  = minutes_path
-        results["minutes_bytes"] = minutes_bytes
-        st.write(f"✓ 회의록 생성 완료")
+        msg = client.messages.create(
+            model="claude-opus-4-5",
+            max_tokens=3000,
+            messages=[{"role": "user", "content": f"""수원시정연구원 행정 전문가로서 아래 전사 텍스트로 공식 회의록을 JSON으로 작성하세요.
+
+[주제] {context.get('main_topic','')}
+[전사] {transcript[:4000]}
+
+{{
+  "meeting_title": "회의명",
+  "date": "날짜",
+  "location": "장소 (없으면 수원시정연구원 G룸)",
+  "attendees": ["참석자1"],
+  "agenda": ["안건1","안건2"],
+  "discussion": [{{"topic":"주제1","content":["내용1","내용2"]}}],
+  "decisions": ["결정사항1"],
+  "action_items": [{{"task":"할일","owner":"담당자","due":"기한"}}],
+  "next_meeting": ""
+}}
+
+JSON만 반환하세요."""}]
+        )
+        raw2 = msg.content[0].text.strip()
+        if raw2.startswith("```"):
+            raw2 = raw2.split("```")[1]
+            if raw2.startswith("json"): raw2 = raw2[4:]
+        try:
+            minutes_data = json.loads(raw2.strip())
+        except Exception:
+            minutes_data = {"meeting_title": context.get("main_topic","회의"),
+                            "date": datetime.now().strftime("%Y년 %m월 %d일"),
+                            "location":"수원시정연구원 G룸","attendees":[],
+                            "agenda":[],"discussion":[],"decisions":[],"action_items":[],"next_meeting":""}
+
+        # 회의록 DOCX 메모리 생성
+        doc = Document()
+        sec = doc.sections[0]
+        sec.top_margin = sec.bottom_margin = Cm(2.5)
+        sec.left_margin = sec.right_margin = Cm(3.0)
+
+        def add_para(text, bold=False, size=11, align=WD_ALIGN_PARAGRAPH.LEFT):
+            p = doc.add_paragraph()
+            p.alignment = align
+            r = p.add_run(text)
+            r.bold = bold
+            r.font.size = Pt(size)
+            r.font.name = "맑은 고딕"
+            return p
+
+        add_para(minutes_data.get("meeting_title","회의록"), bold=True, size=16, align=WD_ALIGN_PARAGRAPH.CENTER)
+        add_para(f"일시: {minutes_data.get('date','')}  |  장소: {minutes_data.get('location','')}  |  참석자: {', '.join(minutes_data.get('attendees',[]))}", size=10)
+        doc.add_paragraph()
+        add_para("□ 안건", bold=True, size=13)
+        for item in minutes_data.get("agenda",[]): add_para(f"  ○ {item}")
+        add_para("□ 주요 논의 내용", bold=True, size=13)
+        for block in minutes_data.get("discussion",[]):
+            add_para(f"  ○ {block.get('topic','')}", bold=True)
+            for line in block.get("content",[]): add_para(f"    - {line}")
+        add_para("□ 결정사항", bold=True, size=13)
+        for item in minutes_data.get("decisions",[]): add_para(f"  ○ {item}")
+        add_para("□ 향후 조치사항", bold=True, size=13)
+        for item in minutes_data.get("action_items",[]):
+            add_para(f"  ○ {item.get('task','')} (담당: {item.get('owner','-')}, 기한: {item.get('due','-')})")
+
+        buf = io.BytesIO()
+        doc.save(buf)
+        results["minutes_bytes"] = buf.getvalue()
+        st.write("✓ 회의록 생성 완료")
         status.update(label="**[3/5] 회의록 완료** ✅", state="complete")
 
     # ── Step 4: 초정밀 프롬프트 생성 ─────────────────
     with st.status("**[4/5] 울트라 초정밀 프롬프트 생성 중...**", expanded=True) as status:
-        ultra_prompt = UltraPromptGeneratorAgent().run(context)
+        msg = client.messages.create(
+            model="claude-opus-4-5",
+            max_tokens=4000,
+            messages=[{"role": "user", "content": f"""AI 프롬프트 엔지니어링 전문가로서, 아래 맥락의 수원시정연구원 정책 보고서 작성을 위한 초정밀 프롬프트를 작성하세요.
+
+주제: {context.get('main_topic','')}
+이슈: {', '.join(context.get('key_issues',[]))}
+키워드: {', '.join(context.get('keywords',[]))}
+보고서 제목: {context.get('suggested_report_title','')}
+
+포함 요소: 역할설정, 목차(5장 이상), 각 장별 작성지침, 인용방식, 수원시 특수성 반영법, 출력형식.
+프롬프트만 출력하세요."""}]
+        )
+        ultra_prompt = msg.content[0].text.strip()
         results["ultra_prompt"] = ultra_prompt
         st.write(f"✓ 프롬프트 생성 완료 ({len(ultra_prompt):,}자)")
         status.update(label="**[4/5] 프롬프트 생성 완료** ✅", state="complete")
 
     # ── Step 5: CEO 브리핑 생성 ──────────────────────
     with st.status("**[5/5] CEO 브리핑 생성 중...**", expanded=True) as status:
-        briefing_path = CEOBriefingAgent().run(ultra_prompt=ultra_prompt, context=context)
-        results["briefing_path"] = briefing_path
+        msg = client.messages.create(
+            model="claude-opus-4-5",
+            max_tokens=2000,
+            messages=[{"role": "user", "content": f"""수원시정연구원 연구기획 전문가로서 원장님께 보고할 1페이지 브리핑을 JSON으로 작성하세요.
+
+주제: {context.get('main_topic','')}
+이슈: {', '.join(context.get('key_issues',[]))}
+맥락: {context.get('policy_context','')}
+
+{{
+  "briefing_title": "보고 제목",
+  "overview": ["개요1","개요2"],
+  "current_status": ["현황1","현황2","현황3"],
+  "analysis": ["분석1","분석2","분석3"],
+  "recommendations": ["제언1","제언2","제언3"],
+  "schedule": ["1단계: ○○ (YYYY.MM)","2단계: ○○ (YYYY.MM)","3단계: ○○ (YYYY.MM)"]
+}}
+
+JSON만 반환하세요."""}]
+        )
+        raw3 = msg.content[0].text.strip()
+        if raw3.startswith("```"):
+            raw3 = raw3.split("```")[1]
+            if raw3.startswith("json"): raw3 = raw3[4:]
+        try:
+            bd = json.loads(raw3.strip())
+        except Exception:
+            bd = {"briefing_title":"정책 연구 보고","overview":[],"current_status":[],
+                  "analysis":[],"recommendations":[],"schedule":[]}
+
+        # 브리핑 DOCX 메모리 생성
+        doc2 = Document()
+        sec2 = doc2.sections[0]
+        sec2.top_margin = sec2.bottom_margin = Cm(2.5)
+        sec2.left_margin = sec2.right_margin = Cm(3.0)
+
+        add_para2 = lambda text, bold=False, size=11, align=WD_ALIGN_PARAGRAPH.LEFT: (
+            lambda p, r: (setattr(r, 'bold', bold), setattr(r.font, 'size', Pt(size)),
+                          setattr(r.font, 'name', '맑은 고딕'), setattr(p, 'alignment', align), p)
+        )(*((doc2.add_paragraph(), None)))[0] if False else None
+
+        def add2(text, bold=False, size=11, align=WD_ALIGN_PARAGRAPH.LEFT):
+            p = doc2.add_paragraph()
+            p.alignment = align
+            r = p.add_run(text)
+            r.bold = bold
+            r.font.size = Pt(size)
+            r.font.name = "맑은 고딕"
+
+        add2(bd.get("briefing_title","정책 연구 보고"), bold=True, size=16, align=WD_ALIGN_PARAGRAPH.CENTER)
+        add2(datetime.now().strftime("%Y년 %m월 %d일  수원시정연구원"), size=10, align=WD_ALIGN_PARAGRAPH.CENTER)
+        doc2.add_paragraph("─" * 40)
+        for section_title, key in [("□ 보고 개요","overview"),("□ 핵심 현황","current_status"),
+                                    ("□ 주요 분석 방향","analysis"),("□ 정책 제언","recommendations")]:
+            add2(section_title, bold=True, size=13)
+            for item in bd.get(key,[]): add2(f"  ○ {item}")
+        add2("□ 향후 추진 일정", bold=True, size=13)
+        for item in bd.get("schedule",[]): add2(f"  - {item}")
+
+        buf2 = io.BytesIO()
+        doc2.save(buf2)
+        results["briefing_bytes"] = buf2.getvalue()
+        results["briefing_title"] = bd.get("briefing_title","CEO브리핑")
         status.update(label="**[5/5] CEO 브리핑 완료** ✅", state="complete")
 
     st.success("🎉 파이프라인 완료!")
 
-    # ──────────────────────────────────────────────
-    # 결과 탭
-    # ──────────────────────────────────────────────
+    # ── 결과 탭 ───────────────────────────────────
     r1, r2, r3, r4 = st.tabs(["📋 맥락 분석", "✨ 초정밀 프롬프트", "📝 전사 텍스트", "⬇️ 다운로드"])
 
     with r1:
@@ -210,36 +351,15 @@ if st.button("🚀 파이프라인 실행", disabled=run_disabled, use_container
 
     with r4:
         st.markdown("### 파일 다운로드")
-
-        # 전사본 TXT
-        st.download_button(
-            label="📄 전사본 TXT 다운로드",
-            data=results["transcript"].encode("utf-8"),
-            file_name="전사본.txt",
-            mime="text/plain",
-            use_container_width=True,
-        )
-
+        st.download_button("📄 전사본 TXT", data=results["transcript"].encode("utf-8"),
+                           file_name="전사본.txt", mime="text/plain", use_container_width=True)
         st.markdown("")
-
-        # 회의록 DOCX
-        st.download_button(
-            label="📝 회의록 DOCX 다운로드",
-            data=results["minutes_bytes"],
-            file_name=os.path.basename(results["minutes_path"]),
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            use_container_width=True,
-        )
-
+        st.download_button("📝 회의록 DOCX", data=results["minutes_bytes"],
+                           file_name="회의록.docx",
+                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                           use_container_width=True)
         st.markdown("")
-
-        # CEO 브리핑 DOCX
-        if os.path.exists(results["briefing_path"]):
-            with open(results["briefing_path"], "rb") as f:
-                st.download_button(
-                    label="📋 CEO 브리핑 DOCX 다운로드",
-                    data=f,
-                    file_name=os.path.basename(results["briefing_path"]),
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True,
-                )
+        st.download_button("📋 CEO 브리핑 DOCX", data=results["briefing_bytes"],
+                           file_name="CEO브리핑.docx",
+                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                           use_container_width=True)
