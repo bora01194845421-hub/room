@@ -3,6 +3,7 @@
 """
 import sys
 import os
+import math
 import tempfile
 import streamlit as st
 
@@ -83,7 +84,8 @@ audio_ext   = "wav"
 text_input  = ""
 
 with tab_rec:
-    st.markdown("버튼을 눌러 녹음을 시작하고, 다시 눌러 종료하세요.")
+    st.markdown("🔴 버튼을 눌러 **녹음 시작**, 다시 눌러 **종료**하세요.")
+    st.caption("1시간 이상도 가능합니다. 침묵이 길어도 자동으로 멈추지 않습니다.")
     try:
         from audio_recorder_streamlit import audio_recorder
         recorded = audio_recorder(
@@ -92,14 +94,18 @@ with tab_rec:
             neutral_color="#1f497d",
             icon_name="microphone",
             icon_size="3x",
-            pause_threshold=3.0,
+            pause_threshold=86400,   # 24시간 — 사실상 자동정지 없음
             sample_rate=16000,
         )
         if recorded:
+            duration_sec = len(recorded) / (16000 * 2)   # 16kHz, 16bit
+            size_mb = len(recorded) / (1024 * 1024)
             audio_bytes = recorded
             audio_ext   = "wav"
             st.audio(recorded, format="audio/wav")
-            st.success(f"녹음 완료 ({len(recorded):,} bytes)")
+            st.success(f"녹음 완료 — 약 {duration_sec/60:.1f}분 ({size_mb:.1f} MB)")
+            if size_mb > 20:
+                st.info(f"파일이 커서 자동으로 나눠서 전사합니다 ({math.ceil(size_mb/20)}개 청크)")
     except ImportError:
         st.error("`audio-recorder-streamlit` 패키지가 필요합니다.")
 
