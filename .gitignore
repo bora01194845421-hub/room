@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+output/
+knowledge_base/embeddings/
+*.docx
+pipeline_state_*.json
+.streamlit/
