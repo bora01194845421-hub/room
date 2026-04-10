@@ -22,18 +22,46 @@ st.caption("회의 음성/텍스트 → 전사 → 회의록 → 맥락 분석 �
 st.divider()
 
 # ──────────────────────────────────────────────
+# API 키 자동 로드 (우선순위: st.secrets > 환경변수 > .env 파일)
+# ──────────────────────────────────────────────
+def _load_api_key() -> str:
+    # 1) Streamlit Cloud Secrets
+    try:
+        return st.secrets["ANTHROPIC_API_KEY"]
+    except Exception:
+        pass
+    # 2) 환경변수
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return os.environ["ANTHROPIC_API_KEY"]
+    # 3) .env 파일 (로컬 개발용)
+    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                if line.startswith("ANTHROPIC_API_KEY="):
+                    return line.strip().split("=", 1)[1]
+    return ""
+
+api_key = _load_api_key()
+if api_key:
+    os.environ["ANTHROPIC_API_KEY"] = api_key
+
+# ──────────────────────────────────────────────
 # 사이드바
 # ──────────────────────────────────────────────
 with st.sidebar:
     st.header("⚙️ 설정")
-    api_key = st.text_input(
-        "Anthropic API Key",
-        type="password",
-        value=os.environ.get("ANTHROPIC_API_KEY", ""),
-        help="sk-ant-... 형식의 API 키를 입력하세요",
-    )
     if api_key:
-        os.environ["ANTHROPIC_API_KEY"] = api_key
+        st.success("API Key 로드됨 ✅")
+    else:
+        manual_key = st.text_input(
+            "Anthropic API Key",
+            type="password",
+            help="sk-ant-... 형식의 API 키를 입력하세요",
+        )
+        if manual_key:
+            api_key = manual_key
+            os.environ["ANTHROPIC_API_KEY"] = api_key
 
     st.divider()
     st.markdown("**파이프라인 구조**")
@@ -99,7 +127,7 @@ has_input    = bool(audio_bytes) or bool(text_input.strip())
 run_disabled = not api_key or not has_input
 
 if not api_key:
-    st.warning("사이드바에서 Anthropic API Key를 입력해주세요.")
+    st.warning("API Key가 설정되지 않았습니다. 사이드바에서 입력해주세요.")
 elif not has_input:
     st.info("녹음하거나 파일을 업로드하거나 텍스트를 입력해주세요.")
 
