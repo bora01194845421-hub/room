@@ -22,12 +22,13 @@ st.set_page_config(
 # ──────────────────────────────────────────────
 # API 키 로드 (config에 내장 → Secrets 우선)
 # ──────────────────────────────────────────────
+ANTHROPIC_API_KEY = "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"
+OPENAI_API_KEY    = "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"
 try:
-    ANTHROPIC_API_KEY = st.secrets["ANTHROPIC_API_KEY"]
-    OPENAI_API_KEY    = st.secrets["OPENAI_API_KEY"]
+    ANTHROPIC_API_KEY = st.secrets.get("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY)
+    OPENAI_API_KEY    = st.secrets.get("OPENAI_API_KEY", OPENAI_API_KEY)
 except Exception:
-    ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-    OPENAI_API_KEY    = os.environ.get("OPENAI_API_KEY", "")
+    pass
 
 os.environ["ANTHROPIC_API_KEY"] = ANTHROPIC_API_KEY
 os.environ["OPENAI_API_KEY"]    = OPENAI_API_KEY
