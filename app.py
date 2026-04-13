@@ -20,11 +20,13 @@ st.set_page_config(
 )
 
 # ──────────────────────────────────────────────
-# API 키 로드 (Streamlit Secrets → 사이드바 입력)
+# API 키 로드
 # ──────────────────────────────────────────────
 ANTHROPIC_API_KEY = ""
+GROQ_API_KEY_DEFAULT = ""
 try:
     ANTHROPIC_API_KEY = st.secrets.get("ANTHROPIC_API_KEY", "")
+    GROQ_API_KEY_DEFAULT = st.secrets.get("GROQ_API_KEY", "")
 except Exception:
     pass
 
@@ -38,42 +40,10 @@ st.divider()
 with st.sidebar:
     st.header("⚙️ 설정")
 
-    # ── Anthropic API 키 ──
-    if not ANTHROPIC_API_KEY:
-        _key_input = st.text_input(
-            "🔑 Anthropic API 키",
-            type="password",
-            placeholder="sk-ant-api03-...",
-            help="console.anthropic.com → API Keys → Create Key"
-        )
-        if _key_input.strip():
-            ANTHROPIC_API_KEY = _key_input.strip()
-            st.success("Anthropic Key 입력됨 ✅")
-        else:
-            st.warning("Anthropic API 키를 입력하세요.")
-    else:
-        st.success("Anthropic Key 로드됨 ✅")
-
-    # ── Groq API 키 (음성 전사용, 무료) ──
-    GROQ_API_KEY = ""
-    try:
-        GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
-    except Exception:
-        pass
-    if not GROQ_API_KEY:
-        _groq_input = st.text_input(
-            "🎙️ Groq API 키 (음성 전사용·무료)",
-            type="password",
-            placeholder="gsk_...",
-            help="console.groq.com에서 무료 발급 → 하루 8시간 음성 전사 무료"
-        )
-        if _groq_input.strip():
-            GROQ_API_KEY = _groq_input.strip()
-            st.success("Groq Key 입력됨 ✅")
-        else:
-            st.caption("🔗 [Groq 무료 키 발급](https://console.groq.com)")
-    else:
-        st.success("Groq Key 로드됨 ✅")
+    # ── API 키 상태 표시 ──
+    GROQ_API_KEY = GROQ_API_KEY_DEFAULT
+    st.success("Anthropic Key ✅")
+    st.success("Groq Key ✅")
 
     st.divider()
     st.markdown("**파이프라인 구조**")
