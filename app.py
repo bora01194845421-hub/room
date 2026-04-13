@@ -38,36 +38,51 @@ st.divider()
 with st.sidebar:
     st.header("⚙️ 설정")
 
-    # API 키 입력 (Secrets에 없을 경우 사이드바에서 직접 입력)
+    # ── Anthropic API 키 ──
     if not ANTHROPIC_API_KEY:
         _key_input = st.text_input(
-            "🔑 Anthropic API 키 입력",
+            "🔑 Anthropic API 키",
             type="password",
             placeholder="sk-ant-api03-...",
-            help="console.anthropic.com에서 발급받은 API 키를 붙여넣으세요."
+            help="console.anthropic.com → API Keys → Create Key"
         )
         if _key_input.strip():
             ANTHROPIC_API_KEY = _key_input.strip()
-            st.success("API Key 입력됨 ✅")
+            st.success("Anthropic Key 입력됨 ✅")
         else:
-            st.warning("API 키를 입력해야 실행됩니다.")
-            st.markdown("""
-**키 발급 방법:**
-1. [console.anthropic.com](https://console.anthropic.com) 접속
-2. API Keys → Create Key
-3. 위 칸에 붙여넣기
-""")
+            st.warning("Anthropic API 키를 입력하세요.")
     else:
-        st.success("API Key 로드됨 ✅")
+        st.success("Anthropic Key 로드됨 ✅")
+
+    # ── Groq API 키 (음성 전사용, 무료) ──
+    GROQ_API_KEY = ""
+    try:
+        GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
+    except Exception:
+        pass
+    if not GROQ_API_KEY:
+        _groq_input = st.text_input(
+            "🎙️ Groq API 키 (음성 전사용·무료)",
+            type="password",
+            placeholder="gsk_...",
+            help="console.groq.com에서 무료 발급 → 하루 8시간 음성 전사 무료"
+        )
+        if _groq_input.strip():
+            GROQ_API_KEY = _groq_input.strip()
+            st.success("Groq Key 입력됨 ✅")
+        else:
+            st.caption("🔗 [Groq 무료 키 발급](https://console.groq.com)")
+    else:
+        st.success("Groq Key 로드됨 ✅")
 
     st.divider()
     st.markdown("**파이프라인 구조**")
     st.markdown("""
-1. 🎙️ Transcriber
-2. 📝 Minutes Writer
-3. 🔍 Context Analyzer
-4. ✨ Ultra Prompt Generator
-5. 📋 CEO Briefing
+1. 🎙️ Whisper (Groq) — 음성→텍스트
+2. 🔍 Claude — 맥락 분석
+3. 📝 Claude — 회의록 작성
+4. ✨ Claude — 초정밀 프롬프트
+5. 📋 Claude — 원장 브리핑
 """)
 
 # ──────────────────────────────────────────────
@@ -130,36 +145,29 @@ if st.button("🚀 파이프라인 실행", disabled=not (has_input and has_key)
 
     results = {}
 
-    # ── Step 1: 전사 (Claude API 사용) ───────────────
+    # ── Step 1: 전사 (Groq Whisper) ───────────────
     with st.status("**[1/5] 음성 전사 중...**", expanded=True) as status:
+        import requests as _req
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         if audio_bytes:
-            import base64
-            # 오디오를 base64로 인코딩해 Claude에 전달
-            audio_b64 = base64.standard_b64encode(audio_bytes).decode("utf-8")
-            media_type = f"audio/{audio_ext}" if audio_ext != "mp3" else "audio/mpeg"
-            msg = client.messages.create(
-                model="claude-opus-4-5",
-                max_tokens=8096,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "document",
-                            "source": {
-                                "type": "base64",
-                                "media_type": media_type,
-                                "data": audio_b64,
-                            },
-                        },
-                        {
-                            "type": "text",
-                            "text": "이 음성 파일을 한국어로 정확하게 전사해주세요. 전사 텍스트만 출력하고 다른 설명은 하지 마세요."
-                        }
-                    ],
-                }]
+            if not GROQ_API_KEY:
+                st.error("🎙️ 음성 전사를 위해 **Groq API 키**가 필요합니다.\n\n"
+                         "사이드바에서 Groq API 키를 입력하거나, "
+                         "**텍스트 입력 탭**에 회의 내용을 직접 붙여넣어 주세요.\n\n"
+                         "🔗 무료 키 발급: https://console.groq.com")
+                st.stop()
+            mime = "audio/mpeg" if audio_ext == "mp3" else f"audio/{audio_ext}"
+            resp = _req.post(
+                "https://api.groq.com/openai/v1/audio/transcriptions",
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+                files={"file": (f"audio.{audio_ext}", audio_bytes, mime)},
+                data={"model": "whisper-large-v3-turbo", "language": "ko", "response_format": "text"},
+                timeout=300,
             )
-            transcript = msg.content[0].text.strip()
+            if resp.status_code != 200:
+                st.error(f"전사 오류 (Groq): {resp.status_code} — {resp.text[:300]}")
+                st.stop()
+            transcript = resp.text.strip()
             st.write(f"✓ 전사 완료 ({len(transcript):,}자)")
         else:
             transcript = text_input.strip()
