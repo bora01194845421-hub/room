@@ -110,25 +110,37 @@ if st.button("🚀 파이프라인 실행", disabled=not has_input, use_containe
 
     results = {}
 
-    # ── Step 1: 전사 ──────────────────────────────
+    # ── Step 1: 전사 (Claude API 사용) ───────────────
     with st.status("**[1/5] 음성 전사 중...**", expanded=True) as status:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         if audio_bytes:
-            from openai import OpenAI
-            oai = OpenAI(api_key=OPENAI_API_KEY)
-            with tempfile.NamedTemporaryFile(suffix=f".{audio_ext}", delete=False) as tmp:
-                tmp.write(audio_bytes)
-                tmp_path = tmp.name
-            try:
-                with open(tmp_path, "rb") as f:
-                    resp = oai.audio.transcriptions.create(
-                        model="whisper-1",
-                        file=f,
-                        language="ko",
-                    )
-                transcript = resp.text.strip()
-                st.write(f"✓ 전사 완료 ({len(transcript):,}자)")
-            finally:
-                os.unlink(tmp_path)
+            import base64
+            # 오디오를 base64로 인코딩해 Claude에 전달
+            audio_b64 = base64.standard_b64encode(audio_bytes).decode("utf-8")
+            media_type = f"audio/{audio_ext}" if audio_ext != "mp3" else "audio/mpeg"
+            msg = client.messages.create(
+                model="claude-opus-4-5",
+                max_tokens=8096,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": audio_b64,
+                            },
+                        },
+                        {
+                            "type": "text",
+                            "text": "이 음성 파일을 한국어로 정확하게 전사해주세요. 전사 텍스트만 출력하고 다른 설명은 하지 마세요."
+                        }
+                    ],
+                }]
+            )
+            transcript = msg.content[0].text.strip()
+            st.write(f"✓ 전사 완료 ({len(transcript):,}자)")
         else:
             transcript = text_input.strip()
             st.write(f"✓ 텍스트 입력 ({len(transcript):,}자)")
