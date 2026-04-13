@@ -6,6 +6,7 @@ import os
 import math
 import io
 import json
+import time
 import requests
 import streamlit as st
 from datetime import datetime
@@ -33,20 +34,25 @@ except Exception:
 
 GROQ_LLM_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_STT_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
-GROQ_MODEL   = "llama-3.3-70b-versatile"
+GROQ_MODEL   = "llama-3.1-8b-instant"   # 속도 제한 여유 있는 빠른 모델
 
-def groq_chat(prompt, max_tokens=3000):
-    """Groq LLM 호출"""
-    resp = requests.post(
-        GROQ_LLM_URL,
-        headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-        json={"model": GROQ_MODEL, "messages": [{"role": "user", "content": prompt}],
-              "max_tokens": max_tokens, "temperature": 0.3},
-        timeout=120,
-    )
-    if resp.status_code != 200:
+def groq_chat(prompt, max_tokens=2000):
+    """Groq LLM 호출 (재시도 포함)"""
+    for attempt in range(3):
+        resp = requests.post(
+            GROQ_LLM_URL,
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+            json={"model": GROQ_MODEL, "messages": [{"role": "user", "content": prompt}],
+                  "max_tokens": max_tokens, "temperature": 0.3},
+            timeout=120,
+        )
+        if resp.status_code == 200:
+            return resp.json()["choices"][0]["message"]["content"].strip()
+        if resp.status_code == 429:  # rate limit
+            time.sleep(5 * (attempt + 1))
+            continue
         raise Exception(f"Groq LLM 오류 {resp.status_code}: {resp.text[:300]}")
-    return resp.json()["choices"][0]["message"]["content"].strip()
+    raise Exception("Groq API 속도 제한 초과 — 잠시 후 다시 시도해주세요.")
 
 # ──────────────────────────────────────────────
 # UI
@@ -187,6 +193,7 @@ JSON만 반환하세요.""")
         results["context"] = context
         st.write(f"✓ 주제: {context.get('main_topic','?')}")
         status.update(label="**[2/5] 맥락 분석 완료** ✅", state="complete")
+    time.sleep(2)
 
     # ── Step 3: 회의록 작성 ───────────────────────────
     with st.status("**[3/5] 회의록 작성 중...**", expanded=True) as status:
@@ -254,6 +261,7 @@ JSON만 반환하세요.""")
         results["minutes_bytes"] = buf.getvalue()
         st.write("✓ 회의록 생성 완료")
         status.update(label="**[3/5] 회의록 완료** ✅", state="complete")
+    time.sleep(2)
 
     # ── Step 4: 초정밀 프롬프트 생성 ─────────────────
     with st.status("**[4/5] 초정밀 프롬프트 생성 중...**", expanded=True) as status:
@@ -269,6 +277,7 @@ JSON만 반환하세요.""")
         results["ultra_prompt"] = ultra_prompt
         st.write(f"✓ 프롬프트 생성 완료 ({len(ultra_prompt):,}자)")
         status.update(label="**[4/5] 프롬프트 생성 완료** ✅", state="complete")
+    time.sleep(2)
 
     # ── Step 5: 원장 브리핑 생성 ──────────────────────
     with st.status("**[5/5] 원장 브리핑 생성 중...**", expanded=True) as status:
