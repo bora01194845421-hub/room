@@ -20,18 +20,13 @@ st.set_page_config(
 )
 
 # ──────────────────────────────────────────────
-# API 키 로드 (config에 내장 → Secrets 우선)
+# API 키 로드 (Streamlit Secrets → 사이드바 입력)
 # ──────────────────────────────────────────────
-ANTHROPIC_API_KEY = "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"
-OPENAI_API_KEY    = "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"
+ANTHROPIC_API_KEY = ""
 try:
-    ANTHROPIC_API_KEY = st.secrets.get("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY)
-    OPENAI_API_KEY    = st.secrets.get("OPENAI_API_KEY", OPENAI_API_KEY)
+    ANTHROPIC_API_KEY = st.secrets.get("ANTHROPIC_API_KEY", "")
 except Exception:
     pass
-
-os.environ["ANTHROPIC_API_KEY"] = ANTHROPIC_API_KEY
-os.environ["OPENAI_API_KEY"]    = OPENAI_API_KEY
 
 # ──────────────────────────────────────────────
 # UI
@@ -42,7 +37,29 @@ st.divider()
 
 with st.sidebar:
     st.header("⚙️ 설정")
-    st.success("API Key 로드됨 ✅")
+
+    # API 키 입력 (Secrets에 없을 경우 사이드바에서 직접 입력)
+    if not ANTHROPIC_API_KEY:
+        _key_input = st.text_input(
+            "🔑 Anthropic API 키 입력",
+            type="password",
+            placeholder="sk-ant-api03-...",
+            help="console.anthropic.com에서 발급받은 API 키를 붙여넣으세요."
+        )
+        if _key_input.strip():
+            ANTHROPIC_API_KEY = _key_input.strip()
+            st.success("API Key 입력됨 ✅")
+        else:
+            st.warning("API 키를 입력해야 실행됩니다.")
+            st.markdown("""
+**키 발급 방법:**
+1. [console.anthropic.com](https://console.anthropic.com) 접속
+2. API Keys → Create Key
+3. 위 칸에 붙여넣기
+""")
+    else:
+        st.success("API Key 로드됨 ✅")
+
     st.divider()
     st.markdown("**파이프라인 구조**")
     st.markdown("""
@@ -95,11 +112,14 @@ st.divider()
 # 실행 버튼
 # ──────────────────────────────────────────────
 has_input = bool(audio_bytes) or bool(text_input.strip())
+has_key   = bool(ANTHROPIC_API_KEY)
 
-if not has_input:
+if not has_key:
+    st.error("⬅️ 왼쪽 사이드바에 Anthropic API 키를 먼저 입력해주세요.")
+elif not has_input:
     st.info("녹음하거나 파일을 업로드하거나 텍스트를 입력해주세요.")
 
-if st.button("🚀 파이프라인 실행", disabled=not has_input, use_container_width=True, type="primary"):
+if st.button("🚀 파이프라인 실행", disabled=not (has_input and has_key), use_container_width=True, type="primary"):
 
     import anthropic
     import json
