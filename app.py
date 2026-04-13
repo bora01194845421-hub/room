@@ -1,12 +1,14 @@
 """
-수원시정연구원 G룸 에이전트 - Streamlit 웹 UI
+수원시정연구원 G룸 에이전트 - Streamlit 웹 UI (Groq 기반 완전 무료)
 """
 import sys
 import os
 import math
-import tempfile
 import io
+import json
+import requests
 import streamlit as st
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -20,60 +22,60 @@ st.set_page_config(
 )
 
 # ──────────────────────────────────────────────
-# API 키 로드
+# API 키 로드 (Groq 단일 키)
 # ──────────────────────────────────────────────
-# 설정값 (분할 저장)
-_a1="sk-ant-"; _a2="api03-WZisd7dP9efeyXFgO2Htv6lXW0zEf"
-_a3="zejVH3tXfadBJoSdCIklF07W0C9sRx353WU7QzVGOjv4SMCMOVwCnEMDg-3e4N6wAA"
 _g1="gs"; _g2="k_LcGsRlA5K76pEWp80JmYWGdyb3FY6Mt3rNbSiJx0GfukBIkBNPnD"
-ANTHROPIC_API_KEY = _a1+_a2+_a3
-GROQ_API_KEY_DEFAULT = _g1+_g2
+GROQ_API_KEY = _g1 + _g2
 try:
-    ANTHROPIC_API_KEY = st.secrets.get("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY)
-    GROQ_API_KEY_DEFAULT = st.secrets.get("GROQ_API_KEY", GROQ_API_KEY_DEFAULT)
+    GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", GROQ_API_KEY)
 except Exception:
     pass
+
+GROQ_LLM_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_STT_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+GROQ_MODEL   = "llama-3.3-70b-versatile"
+
+def groq_chat(prompt, max_tokens=3000):
+    """Groq LLM 호출"""
+    resp = requests.post(
+        GROQ_LLM_URL,
+        headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+        json={"model": GROQ_MODEL, "messages": [{"role": "user", "content": prompt}],
+              "max_tokens": max_tokens, "temperature": 0.3},
+        timeout=120,
+    )
+    if resp.status_code != 200:
+        raise Exception(f"Groq LLM 오류 {resp.status_code}: {resp.text[:300]}")
+    return resp.json()["choices"][0]["message"]["content"].strip()
 
 # ──────────────────────────────────────────────
 # UI
 # ──────────────────────────────────────────────
 st.title("🏛️ 수원시정연구원 G룸 에이전트")
-st.caption("회의 음성/텍스트 → 전사 → 회의록 → 맥락 분석 → 초정밀 프롬프트 → CEO 브리핑")
+st.caption("회의 음성/텍스트 → 전사 → 회의록 → 맥락 분석 → 초정밀 프롬프트 → 원장 브리핑")
 st.divider()
 
 with st.sidebar:
     st.header("⚙️ 설정")
-
-    # ── API 키 상태 표시 ──
-    if ANTHROPIC_API_KEY:
-        st.success("Anthropic Key ✅")
+    if GROQ_API_KEY:
+        st.success("Groq API Key ✅")
+        st.caption("음성 전사 + AI 분석 모두 준비됨")
     else:
-        st.error("Anthropic Key 없음 ❌")
-
-    GROQ_API_KEY = GROQ_API_KEY_DEFAULT
-    if not GROQ_API_KEY:
-        _groq_in = st.text_input(
-            "🎙️ Groq API 키 붙여넣기",
-            type="password",
-            placeholder="gsk_...",
-        )
-        if _groq_in.strip():
-            GROQ_API_KEY = _groq_in.strip()
-            st.success("Groq Key ✅")
-        else:
-            st.warning("Groq Key 필요 (음성 전사용)")
-    else:
-        st.success("Groq Key ✅")
+        st.error("Groq API Key 없음 ❌")
+        _g_in = st.text_input("Groq API 키 입력", type="password", placeholder="gsk_...")
+        if _g_in.strip():
+            GROQ_API_KEY = _g_in.strip()
 
     st.divider()
     st.markdown("**파이프라인 구조**")
     st.markdown("""
-1. 🎙️ Whisper (Groq) — 음성→텍스트
-2. 🔍 Claude — 맥락 분석
-3. 📝 Claude — 회의록 작성
-4. ✨ Claude — 초정밀 프롬프트
-5. 📋 Claude — 원장 브리핑
+1. 🎙️ Whisper — 음성→텍스트
+2. 🔍 Llama 3.3 — 맥락 분석
+3. 📝 Llama 3.3 — 회의록 작성
+4. ✨ Llama 3.3 — 초정밀 프롬프트
+5. 📋 Llama 3.3 — 원장 브리핑
 """)
+    st.caption("🆓 Groq 무료 API 사용")
 
 # ──────────────────────────────────────────────
 # 입력 탭
@@ -93,8 +95,6 @@ with tab_rec:
         audio_ext   = "wav"
         size_mb = len(audio_bytes) / (1024 * 1024)
         st.success(f"녹음 완료 ({size_mb:.1f} MB)")
-        if size_mb > 20:
-            st.info(f"자동으로 {math.ceil(size_mb/20)}개로 나눠서 전사합니다.")
 
 with tab_file:
     uploaded = st.file_uploader("m4a / mp3 / wav 파일 선택", type=["m4a", "mp3", "wav"])
@@ -117,45 +117,36 @@ st.divider()
 # 실행 버튼
 # ──────────────────────────────────────────────
 has_input = bool(audio_bytes) or bool(text_input.strip())
-has_key   = bool(ANTHROPIC_API_KEY)
+has_key   = bool(GROQ_API_KEY)
 
 if not has_key:
-    st.error("⬅️ 왼쪽 사이드바에 Anthropic API 키를 먼저 입력해주세요.")
+    st.error("⬅️ 사이드바에 Groq API 키를 입력해주세요.")
 elif not has_input:
     st.info("녹음하거나 파일을 업로드하거나 텍스트를 입력해주세요.")
 
-if st.button("🚀 파이프라인 실행", disabled=not (has_input and has_key), use_container_width=True, type="primary"):
+if st.button("🚀 파이프라인 실행", disabled=not (has_input and has_key),
+             use_container_width=True, type="primary"):
 
-    import anthropic
-    import json
     from docx import Document
     from docx.shared import Pt, Cm
     from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from datetime import datetime
 
     results = {}
 
-    # ── Step 1: 전사 (Groq Whisper) ───────────────
+    # ── Step 1: 음성 전사 (Groq Whisper) ─────────────
     with st.status("**[1/5] 음성 전사 중...**", expanded=True) as status:
-        import requests as _req
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         if audio_bytes:
-            if not GROQ_API_KEY:
-                st.error("🎙️ 음성 전사를 위해 **Groq API 키**가 필요합니다.\n\n"
-                         "사이드바에서 Groq API 키를 입력하거나, "
-                         "**텍스트 입력 탭**에 회의 내용을 직접 붙여넣어 주세요.\n\n"
-                         "🔗 무료 키 발급: https://console.groq.com")
-                st.stop()
             mime = "audio/mpeg" if audio_ext == "mp3" else f"audio/{audio_ext}"
-            resp = _req.post(
-                "https://api.groq.com/openai/v1/audio/transcriptions",
+            resp = requests.post(
+                GROQ_STT_URL,
                 headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
                 files={"file": (f"audio.{audio_ext}", audio_bytes, mime)},
-                data={"model": "whisper-large-v3-turbo", "language": "ko", "response_format": "text"},
+                data={"model": "whisper-large-v3-turbo", "language": "ko",
+                      "response_format": "text"},
                 timeout=300,
             )
             if resp.status_code != 200:
-                st.error(f"전사 오류 (Groq): {resp.status_code} — {resp.text[:300]}")
+                st.error(f"전사 오류: {resp.status_code} — {resp.text[:300]}")
                 st.stop()
             transcript = resp.text.strip()
             st.write(f"✓ 전사 완료 ({len(transcript):,}자)")
@@ -165,13 +156,9 @@ if st.button("🚀 파이프라인 실행", disabled=not (has_input and has_key)
         results["transcript"] = transcript
         status.update(label="**[1/5] 전사 완료** ✅", state="complete")
 
-    # ── Step 2: 맥락 분석 ─────────────────────────
+    # ── Step 2: 맥락 분석 ─────────────────────────────
     with st.status("**[2/5] 맥락 분석 중...**", expanded=True) as status:
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        msg = client.messages.create(
-            model="claude-opus-4-5",
-            max_tokens=2000,
-            messages=[{"role": "user", "content": f"""수원시정연구원 정책 연구 전문가로서 아래 텍스트를 분석해 JSON으로 반환하세요.
+        raw = groq_chat(f"""수원시정연구원 정책 연구 전문가로서 아래 텍스트를 분석해 JSON으로 반환하세요.
 
 [전사 텍스트]
 {transcript[:4000]}
@@ -187,9 +174,7 @@ if st.button("🚀 파이프라인 실행", disabled=not (has_input and has_key)
   "suggested_report_title": "보고서 제목 초안"
 }}
 
-JSON만 반환하세요."""}]
-        )
-        raw = msg.content[0].text.strip()
+JSON만 반환하세요.""")
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"): raw = raw[4:]
@@ -203,12 +188,9 @@ JSON만 반환하세요."""}]
         st.write(f"✓ 주제: {context.get('main_topic','?')}")
         status.update(label="**[2/5] 맥락 분석 완료** ✅", state="complete")
 
-    # ── Step 3: 회의록 작성 ──────────────────────────
+    # ── Step 3: 회의록 작성 ───────────────────────────
     with st.status("**[3/5] 회의록 작성 중...**", expanded=True) as status:
-        msg = client.messages.create(
-            model="claude-opus-4-5",
-            max_tokens=3000,
-            messages=[{"role": "user", "content": f"""수원시정연구원 행정 전문가로서 아래 전사 텍스트로 공식 회의록을 JSON으로 작성하세요.
+        raw2 = groq_chat(f"""수원시정연구원 행정 전문가로서 아래 전사 텍스트로 공식 회의록을 JSON으로 작성하세요.
 
 [주제] {context.get('main_topic','')}
 [전사] {transcript[:4000]}
@@ -225,9 +207,7 @@ JSON만 반환하세요."""}]
   "next_meeting": ""
 }}
 
-JSON만 반환하세요."""}]
-        )
-        raw2 = msg.content[0].text.strip()
+JSON만 반환하세요.""")
         if raw2.startswith("```"):
             raw2 = raw2.split("```")[1]
             if raw2.startswith("json"): raw2 = raw2[4:]
@@ -239,7 +219,7 @@ JSON만 반환하세요."""}]
                             "location":"수원시정연구원 G룸","attendees":[],
                             "agenda":[],"discussion":[],"decisions":[],"action_items":[],"next_meeting":""}
 
-        # 회의록 DOCX 메모리 생성
+        # 회의록 DOCX 생성
         doc = Document()
         sec = doc.sections[0]
         sec.top_margin = sec.bottom_margin = Cm(2.5)
@@ -276,11 +256,8 @@ JSON만 반환하세요."""}]
         status.update(label="**[3/5] 회의록 완료** ✅", state="complete")
 
     # ── Step 4: 초정밀 프롬프트 생성 ─────────────────
-    with st.status("**[4/5] 울트라 초정밀 프롬프트 생성 중...**", expanded=True) as status:
-        msg = client.messages.create(
-            model="claude-opus-4-5",
-            max_tokens=4000,
-            messages=[{"role": "user", "content": f"""AI 프롬프트 엔지니어링 전문가로서, 아래 맥락의 수원시정연구원 정책 보고서 작성을 위한 초정밀 프롬프트를 작성하세요.
+    with st.status("**[4/5] 초정밀 프롬프트 생성 중...**", expanded=True) as status:
+        ultra_prompt = groq_chat(f"""AI 프롬프트 엔지니어링 전문가로서, 아래 맥락의 수원시정연구원 정책 보고서 작성을 위한 초정밀 프롬프트를 작성하세요.
 
 주제: {context.get('main_topic','')}
 이슈: {', '.join(context.get('key_issues',[]))}
@@ -288,19 +265,14 @@ JSON만 반환하세요."""}]
 보고서 제목: {context.get('suggested_report_title','')}
 
 포함 요소: 역할설정, 목차(5장 이상), 각 장별 작성지침, 인용방식, 수원시 특수성 반영법, 출력형식.
-프롬프트만 출력하세요."""}]
-        )
-        ultra_prompt = msg.content[0].text.strip()
+프롬프트만 출력하세요.""", max_tokens=4000)
         results["ultra_prompt"] = ultra_prompt
         st.write(f"✓ 프롬프트 생성 완료 ({len(ultra_prompt):,}자)")
         status.update(label="**[4/5] 프롬프트 생성 완료** ✅", state="complete")
 
-    # ── Step 5: CEO 브리핑 생성 ──────────────────────
-    with st.status("**[5/5] CEO 브리핑 생성 중...**", expanded=True) as status:
-        msg = client.messages.create(
-            model="claude-opus-4-5",
-            max_tokens=2000,
-            messages=[{"role": "user", "content": f"""수원시정연구원 연구기획 전문가로서 원장님께 보고할 1페이지 브리핑을 JSON으로 작성하세요.
+    # ── Step 5: 원장 브리핑 생성 ──────────────────────
+    with st.status("**[5/5] 원장 브리핑 생성 중...**", expanded=True) as status:
+        raw3 = groq_chat(f"""수원시정연구원 연구기획 전문가로서 원장님께 보고할 1페이지 브리핑을 JSON으로 작성하세요.
 
 주제: {context.get('main_topic','')}
 이슈: {', '.join(context.get('key_issues',[]))}
@@ -315,9 +287,7 @@ JSON만 반환하세요."""}]
   "schedule": ["1단계: ○○ (YYYY.MM)","2단계: ○○ (YYYY.MM)","3단계: ○○ (YYYY.MM)"]
 }}
 
-JSON만 반환하세요."""}]
-        )
-        raw3 = msg.content[0].text.strip()
+JSON만 반환하세요.""")
         if raw3.startswith("```"):
             raw3 = raw3.split("```")[1]
             if raw3.startswith("json"): raw3 = raw3[4:]
@@ -327,16 +297,11 @@ JSON만 반환하세요."""}]
             bd = {"briefing_title":"정책 연구 보고","overview":[],"current_status":[],
                   "analysis":[],"recommendations":[],"schedule":[]}
 
-        # 브리핑 DOCX 메모리 생성
+        # 브리핑 DOCX 생성
         doc2 = Document()
         sec2 = doc2.sections[0]
         sec2.top_margin = sec2.bottom_margin = Cm(2.5)
         sec2.left_margin = sec2.right_margin = Cm(3.0)
-
-        add_para2 = lambda text, bold=False, size=11, align=WD_ALIGN_PARAGRAPH.LEFT: (
-            lambda p, r: (setattr(r, 'bold', bold), setattr(r.font, 'size', Pt(size)),
-                          setattr(r.font, 'name', '맑은 고딕'), setattr(p, 'alignment', align), p)
-        )(*((doc2.add_paragraph(), None)))[0] if False else None
 
         def add2(text, bold=False, size=11, align=WD_ALIGN_PARAGRAPH.LEFT):
             p = doc2.add_paragraph()
@@ -359,8 +324,8 @@ JSON만 반환하세요."""}]
         buf2 = io.BytesIO()
         doc2.save(buf2)
         results["briefing_bytes"] = buf2.getvalue()
-        results["briefing_title"] = bd.get("briefing_title","CEO브리핑")
-        status.update(label="**[5/5] CEO 브리핑 완료** ✅", state="complete")
+        results["briefing_title"] = bd.get("briefing_title","원장브리핑")
+        status.update(label="**[5/5] 원장 브리핑 완료** ✅", state="complete")
 
     st.success("🎉 파이프라인 완료!")
 
@@ -388,7 +353,7 @@ JSON만 반환하세요."""}]
                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                            use_container_width=True)
         st.markdown("")
-        st.download_button("📋 CEO 브리핑 DOCX", data=results["briefing_bytes"],
-                           file_name="CEO브리핑.docx",
+        st.download_button("📋 원장 브리핑 DOCX", data=results["briefing_bytes"],
+                           file_name="원장브리핑.docx",
                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                            use_container_width=True)
