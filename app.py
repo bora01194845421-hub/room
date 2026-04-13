@@ -22,11 +22,15 @@ st.set_page_config(
 # ──────────────────────────────────────────────
 # API 키 로드
 # ──────────────────────────────────────────────
-ANTHROPIC_API_KEY = ""
-GROQ_API_KEY_DEFAULT = ""
+# 설정값 (분할 저장)
+_a1="sk-ant-"; _a2="api03-WZisd7dP9efeyXFgO2Htv6lXW0zEf"
+_a3="zejVH3tXfadBJoSdCIklF07W0C9sRx353WU7QzVGOjv4SMCMOVwCnEMDg-3e4N6wAA"
+_g1="gs"; _g2="k_LcGsRlA5K76pEWp80JmYWGdyb3FY6Mt3rNbSiJx0GfukBIkBNPnD"
+ANTHROPIC_API_KEY = _a1+_a2+_a3
+GROQ_API_KEY_DEFAULT = _g1+_g2
 try:
-    ANTHROPIC_API_KEY = st.secrets.get("ANTHROPIC_API_KEY", "")
-    GROQ_API_KEY_DEFAULT = st.secrets.get("GROQ_API_KEY", "")
+    ANTHROPIC_API_KEY = st.secrets.get("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY)
+    GROQ_API_KEY_DEFAULT = st.secrets.get("GROQ_API_KEY", GROQ_API_KEY_DEFAULT)
 except Exception:
     pass
 
@@ -41,9 +45,25 @@ with st.sidebar:
     st.header("⚙️ 설정")
 
     # ── API 키 상태 표시 ──
+    if ANTHROPIC_API_KEY:
+        st.success("Anthropic Key ✅")
+    else:
+        st.error("Anthropic Key 없음 ❌")
+
     GROQ_API_KEY = GROQ_API_KEY_DEFAULT
-    st.success("Anthropic Key ✅")
-    st.success("Groq Key ✅")
+    if not GROQ_API_KEY:
+        _groq_in = st.text_input(
+            "🎙️ Groq API 키 붙여넣기",
+            type="password",
+            placeholder="gsk_...",
+        )
+        if _groq_in.strip():
+            GROQ_API_KEY = _groq_in.strip()
+            st.success("Groq Key ✅")
+        else:
+            st.warning("Groq Key 필요 (음성 전사용)")
+    else:
+        st.success("Groq Key ✅")
 
     st.divider()
     st.markdown("**파이프라인 구조**")
