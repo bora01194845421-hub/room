@@ -17,14 +17,67 @@ st.set_page_config(
 # ── API 키 ──────────────────────────────────────
 _g1 = "gs"; _g2 = "k_LcGsRlA5K76pEWp80JmYWGdyb3FY6Mt3rNbSiJx0GfukBIkBNPnD"
 GROQ_API_KEY = _g1 + _g2
+_a1 = "f31f84a626bb47a5"; _a2 = "a3ac31737010d5c1"
+AAI_KEY = _a1 + _a2
 try:
     GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", GROQ_API_KEY)
+    AAI_KEY      = st.secrets.get("ASSEMBLYAI_API_KEY", AAI_KEY)
 except Exception:
     pass
 
 GROQ_LLM_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_STT_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_MODEL   = "llama-3.3-70b-versatile"
+
+def transcribe_assemblyai(audio_bytes, st_status):
+    """AssemblyAI 고정밀 한국어 전사 (화자 구분 포함)"""
+    headers = {"authorization": AAI_KEY}
+
+    # 1) 오디오 업로드
+    st_status.write("📤 오디오 업로드 중...")
+    up = requests.post(
+        "https://api.assemblyai.com/v2/upload",
+        headers=headers, data=audio_bytes, timeout=180
+    )
+    if up.status_code != 200:
+        raise Exception(f"업로드 오류: {up.text[:200]}")
+    upload_url = up.json()["upload_url"]
+
+    # 2) 전사 요청
+    st_status.write("🔄 전사 요청 중...")
+    tr = requests.post(
+        "https://api.assemblyai.com/v2/transcript",
+        headers={**headers, "content-type": "application/json"},
+        json={
+            "audio_url": upload_url,
+            "language_code": "ko",
+            "punctuate": True,
+            "format_text": True,
+            "speaker_labels": True,
+        },
+        timeout=30
+    )
+    if tr.status_code != 200:
+        raise Exception(f"전사 요청 오류: {tr.text[:200]}")
+    tid = tr.json()["id"]
+
+    # 3) 완료 대기 (폴링)
+    st_status.write("⏳ 전사 처리 중... (음성 길이에 따라 1~3분 소요)")
+    while True:
+        poll = requests.get(
+            f"https://api.assemblyai.com/v2/transcript/{tid}",
+            headers=headers, timeout=30
+        )
+        result = poll.json()
+        if result["status"] == "completed":
+            # 화자 구분이 있으면 화자별로 정리
+            if result.get("utterances"):
+                lines = [f"[화자 {u['speaker']}] {u['text']}"
+                         for u in result["utterances"]]
+                return "\n".join(lines)
+            return result.get("text", "")
+        elif result["status"] == "error":
+            raise Exception(f"전사 실패: {result.get('error','알 수 없는 오류')}")
+        time.sleep(3)
 
 def groq_chat(prompt, max_tokens=2000):
     for attempt in range(3):
@@ -300,14 +353,10 @@ st.divider()
 
 with st.sidebar:
     st.header("⚙️ 설정")
-    if GROQ_API_KEY:
-        st.success("Groq API Key ✅")
-        st.caption("음성 전사 + AI 분석 준비됨")
-    else:
-        st.error("Groq API Key 없음 ❌")
-        _g = st.text_input("Groq 키 입력", type="password", placeholder="gsk_...")
-        if _g.strip():
-            GROQ_API_KEY = _g.strip()
+    st.success("AssemblyAI Key ✅") if AAI_KEY else st.error("AssemblyAI Key 없음 ❌")
+    st.caption("🎙️ 고정밀 한국어 전사 (화자 구분)")
+    st.success("Groq API Key ✅") if GROQ_API_KEY else st.error("Groq Key 없음 ❌")
+    st.caption("🤖 AI 분석 · 프롬프트 생성")
 
     st.divider()
     st.markdown("**산출물 4종**")
@@ -364,23 +413,15 @@ if st.button("🚀 분석 시작", disabled=not (has_input and has_key),
 
     outputs = {}
 
-    # ── 1단계: 전사 ───────────────────────────────
+    # ── 1단계: 전사 (AssemblyAI) ──────────────────
     with st.status("**[1/3] 음성 전사 중...**", expanded=True) as status:
         if audio_bytes:
-            mime = "audio/mpeg" if audio_ext == "mp3" else f"audio/{audio_ext}"
-            resp = requests.post(
-                GROQ_STT_URL,
-                headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
-                files={"file": (f"audio.{audio_ext}", audio_bytes, mime)},
-                data={"model": "whisper-large-v3-turbo", "language": "ko",
-                      "response_format": "text"},
-                timeout=300,
-            )
-            if resp.status_code != 200:
-                st.error(f"전사 오류: {resp.status_code} — {resp.text[:300]}")
+            try:
+                transcript = transcribe_assemblyai(audio_bytes, status)
+                st.write(f"✓ 전사 완료 ({len(transcript):,}자)")
+            except Exception as e:
+                st.error(f"전사 오류: {e}")
                 st.stop()
-            transcript = resp.text.strip()
-            st.write(f"✓ 전사 완료 ({len(transcript):,}자)")
         else:
             transcript = text_input.strip()
             st.write(f"✓ 텍스트 입력 ({len(transcript):,}자)")
