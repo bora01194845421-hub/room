@@ -1,31 +1,21 @@
 """
-수원시정연구원 G룸 에이전트 - Streamlit 웹 UI (Groq 기반 완전 무료)
+G룸 에이전트 v2.0 | 수원시정연구원
+회의 녹음/텍스트 → 4가지 산출물 자동 생성
 """
-import sys
-import os
-import math
-import io
-import json
-import time
-import requests
+import sys, os, io, json, time, requests
 import streamlit as st
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# ──────────────────────────────────────────────
-# 페이지 설정
-# ──────────────────────────────────────────────
 st.set_page_config(
     page_title="G룸 에이전트 | 수원시정연구원",
     page_icon="🏛️",
     layout="wide",
 )
 
-# ──────────────────────────────────────────────
-# API 키 로드 (Groq 단일 키)
-# ──────────────────────────────────────────────
-_g1="gs"; _g2="k_LcGsRlA5K76pEWp80JmYWGdyb3FY6Mt3rNbSiJx0GfukBIkBNPnD"
+# ── API 키 ──────────────────────────────────────
+_g1 = "gs"; _g2 = "k_LcGsRlA5K76pEWp80JmYWGdyb3FY6Mt3rNbSiJx0GfukBIkBNPnD"
 GROQ_API_KEY = _g1 + _g2
 try:
     GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", GROQ_API_KEY)
@@ -34,113 +24,348 @@ except Exception:
 
 GROQ_LLM_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_STT_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
-GROQ_MODEL   = "llama-3.1-8b-instant"   # 속도 제한 여유 있는 빠른 모델
+GROQ_MODEL   = "llama-3.3-70b-versatile"
 
 def groq_chat(prompt, max_tokens=2000):
-    """Groq LLM 호출 (재시도 포함)"""
     for attempt in range(3):
         resp = requests.post(
             GROQ_LLM_URL,
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-            json={"model": GROQ_MODEL, "messages": [{"role": "user", "content": prompt}],
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}",
+                     "Content-Type": "application/json"},
+            json={"model": GROQ_MODEL,
+                  "messages": [{"role": "user", "content": prompt}],
                   "max_tokens": max_tokens, "temperature": 0.3},
             timeout=120,
         )
         if resp.status_code == 200:
             return resp.json()["choices"][0]["message"]["content"].strip()
-        if resp.status_code == 429:  # rate limit
-            time.sleep(5 * (attempt + 1))
+        if resp.status_code == 429:
+            time.sleep(6 * (attempt + 1))
             continue
-        raise Exception(f"Groq LLM 오류 {resp.status_code}: {resp.text[:300]}")
-    raise Exception("Groq API 속도 제한 초과 — 잠시 후 다시 시도해주세요.")
+        raise Exception(f"Groq 오류 {resp.status_code}: {resp.text[:200]}")
+    raise Exception("Groq API 속도 제한 초과 — 10초 후 다시 시도하세요.")
 
-# ──────────────────────────────────────────────
-# UI
-# ──────────────────────────────────────────────
+# ── 회의 결과 보고서 DOCX (정해진 양식) ──────────────
+def make_minutes_docx(data):
+    from docx import Document
+    from docx.shared import Pt, Cm
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.table import WD_ALIGN_VERTICAL
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+
+    FONT = 'KoPub돋움체 Medium'
+
+    doc = Document()
+    sec = doc.sections[0]
+    sec.top_margin    = Cm(3.0)
+    sec.right_margin  = Cm(2.0)
+    sec.bottom_margin = Cm(2.5)
+    sec.left_margin   = Cm(2.0)
+
+    # ── 헬퍼 ──
+    def cell_bg(cell, color='f2f2f2'):
+        tc = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        for s in tcPr.findall(qn('w:shd')):
+            tcPr.remove(s)
+        shd = OxmlElement('w:shd')
+        shd.set(qn('w:val'), 'clear')
+        shd.set(qn('w:color'), 'auto')
+        shd.set(qn('w:fill'), color)
+        tcPr.append(shd)
+
+    def vmerge(cell, restart=True):
+        tc = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        vm = OxmlElement('w:vMerge')
+        if restart:
+            vm.set(qn('w:val'), 'restart')
+        tcPr.append(vm)
+
+    def set_borders(table):
+        tbl = table._tbl
+        tblPr = tbl.tblPr
+        tblBorders = OxmlElement('w:tblBorders')
+        for name in ['top','left','bottom','right','insideH','insideV']:
+            b = OxmlElement(f'w:{name}')
+            b.set(qn('w:val'), 'single')
+            b.set(qn('w:sz'), '4')
+            b.set(qn('w:space'), '0')
+            b.set(qn('w:color'), '000000')
+            tblBorders.append(b)
+        tblPr.append(tblBorders)
+
+    def label(cell, text):
+        cell_bg(cell)
+        cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+        p = cell.paragraphs[0]
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p.clear()
+        run = p.add_run(text)
+        run.bold = True
+        run.font.name = FONT
+        run.font.size = Pt(11)
+
+    def value(cell, text=''):
+        cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+        p = cell.paragraphs[0]
+        run = p.add_run(str(text) if text else '')
+        run.font.name = FONT
+        run.font.size = Pt(11)
+
+    # ── 테이블 7행 6열 ──
+    tbl = doc.add_table(rows=7, cols=6)
+    set_borders(tbl)
+
+    # 열 너비 (DXA→cm: c1=2.47, c2=2.39, c3=2.40, c4=2.40, c5=1.91, c6=5.17)
+    col_w = [2.47, 2.39, 2.40, 2.40, 1.91, 5.17]
+    for row in tbl.rows:
+        for i, c in enumerate(row.cells):
+            c.width = Cm(col_w[i])
+
+    # Row 0: 제목
+    c = tbl.cell(0, 0)
+    c.merge(tbl.cell(0, 5))
+    c.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+    p = c.paragraphs[0]
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r = p.add_run('회의 결과 보고서')
+    r.bold = True; r.font.name = FONT; r.font.size = Pt(17)
+
+    # Row 1: 연구명
+    label(tbl.cell(1, 0), '연구명')
+    tbl.cell(1, 1).merge(tbl.cell(1, 5))
+    value(tbl.cell(1, 1), data.get('project_name', ''))
+
+    # Row 2: 회의안건
+    label(tbl.cell(2, 0), '회의안건')
+    tbl.cell(2, 1).merge(tbl.cell(2, 5))
+    agenda = ', '.join(s.get('title','') for s in data.get('sections', []))
+    value(tbl.cell(2, 1), agenda)
+
+    # Row 3: 일시 | 장소
+    label(tbl.cell(3, 0), '일    시')
+    tbl.cell(3, 1).merge(tbl.cell(3, 3))
+    raw_d = data.get('meeting_date', '')
+    try:
+        dt = datetime.strptime(raw_d[:10], '%Y-%m-%d')
+        days = ['월','화','수','목','금','토','일']
+        raw_d = f"{raw_d[:10]} ({days[dt.weekday()]})"
+    except Exception:
+        pass
+    value(tbl.cell(3, 1), raw_d)
+    label(tbl.cell(3, 4), '장소')
+    value(tbl.cell(3, 5), data.get('venue', ''))
+
+    # Row 4: 참석자 외부 (vmerge 시작)
+    label(tbl.cell(4, 0), '참석자')
+    vmerge(tbl.cell(4, 0), restart=True)
+    value(tbl.cell(4, 1), '외부')
+    tbl.cell(4, 2).merge(tbl.cell(4, 5))
+    value(tbl.cell(4, 2), ', '.join(data.get('external_participants', [])))
+
+    # Row 5: 참석자 내부 (vmerge 계속)
+    vmerge(tbl.cell(5, 0), restart=False)
+    for p in tbl.cell(5, 0).paragraphs:
+        p.clear()
+    value(tbl.cell(5, 1), '내부')
+    tbl.cell(5, 2).merge(tbl.cell(5, 5))
+    value(tbl.cell(5, 2), ', '.join(data.get('internal_participants', [])))
+
+    # Row 6: 회의 내용
+    label(tbl.cell(6, 0), '회의\n내용')
+    tbl.cell(6, 1).merge(tbl.cell(6, 5))
+    cc = tbl.cell(6, 1)
+    cc.vertical_alignment = WD_ALIGN_VERTICAL.TOP
+    cc.paragraphs[0].clear()
+
+    def cp(text, bold=False, indent=0.0, size=11, before=0):
+        pg = cc.add_paragraph()
+        pg.paragraph_format.space_before = Pt(before)
+        pg.paragraph_format.space_after  = Pt(3)
+        if indent: pg.paragraph_format.left_indent = Cm(indent)
+        rn = pg.add_run(text)
+        rn.bold = bold; rn.font.name = FONT; rn.font.size = Pt(size)
+
+    # 논의 내용
+    cp('◆ 논의 내용', bold=True, before=6)
+    for s in data.get('sections', []):
+        cp(s.get('title',''), bold=True, indent=0.5, before=4)
+        cp(s.get('content',''), indent=1.0)
+        if s.get('duration_estimate'):
+            cp(f"(약 {s['duration_estimate']})", indent=1.0, size=10)
+
+    # 결정사항
+    if data.get('decisions'):
+        cp('◆ 결정사항', bold=True, before=6)
+        for i, d in enumerate(data['decisions']):
+            cp(f"{i+1}. {d}", indent=0.5)
+
+    # 액션아이템
+    if data.get('action_items'):
+        cp('◆ 액션아이템', bold=True, before=6)
+        for item in data['action_items']:
+            due = f" (기한: {item.get('due_date','')})" if item.get('due_date') else ''
+            pri = ' [긴급]' if item.get('priority') == 'high' else ''
+            cp(f"• {item.get('task','')} — {item.get('assignee','')}{due}{pri}", indent=0.5)
+
+    # 다음 회의
+    if data.get('next_meeting'):
+        cp('◆ 다음 회의', bold=True, before=6)
+        cp(data['next_meeting'], indent=0.5)
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+# ── 주요내용 분석 DOCX ──────────────────────────────
+def make_analysis_docx(data):
+    from docx import Document
+    from docx.shared import Pt, Cm
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    FONT = '맑은 고딕'
+    doc = Document()
+    sec = doc.sections[0]
+    sec.top_margin = sec.bottom_margin = Cm(2.5)
+    sec.left_margin = sec.right_margin = Cm(3.0)
+
+    def h(text, size=14, before=12):
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(before)
+        p.paragraph_format.space_after  = Pt(4)
+        r = p.add_run(text)
+        r.bold = True; r.font.name = FONT; r.font.size = Pt(size)
+
+    def b(text, bullet=False, size=11):
+        p = doc.add_paragraph()
+        p.paragraph_format.space_after = Pt(3)
+        if bullet: p.paragraph_format.left_indent = Cm(0.5)
+        r = p.add_run(('• ' if bullet else '') + str(text))
+        r.font.name = FONT; r.font.size = Pt(size)
+
+    # 제목
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r = p.add_run('회의 주요내용 분석')
+    r.bold = True; r.font.name = FONT; r.font.size = Pt(18)
+
+    b(f"회의일: {data.get('meeting_date','')}   장소: {data.get('venue','')}   "
+      f"작성: {datetime.now().strftime('%Y.%m.%d')}", size=10)
+    doc.add_paragraph()
+
+    if data.get('keywords'):
+        h('핵심 키워드', 13)
+        b('  '.join(f'[{k}]' for k in data['keywords']))
+
+    if data.get('key_issues'):
+        h('주요 이슈', 13)
+        for issue in data['key_issues']:
+            b(issue, bullet=True)
+
+    if data.get('summary'):
+        h('전체 요약', 13)
+        b(data['summary'])
+
+    if data.get('sections'):
+        h('논의 항목별 분석', 13)
+        for s in data['sections']:
+            p2 = doc.add_paragraph()
+            p2.paragraph_format.space_before = Pt(8)
+            r2 = p2.add_run(f"▶ {s.get('title','')}")
+            r2.bold = True; r2.font.name = FONT; r2.font.size = Pt(11)
+            b(s.get('content',''))
+
+    if data.get('decisions'):
+        h('결정사항', 13)
+        for i, d in enumerate(data['decisions']):
+            b(f"{i+1}. {d}")
+
+    if data.get('action_items'):
+        h('액션아이템', 13)
+        for item in data['action_items']:
+            due = f" (기한: {item.get('due_date','')})" if item.get('due_date') else ''
+            pri = ' ⚡긴급' if item.get('priority') == 'high' else ''
+            b(f"{item.get('task','')} → {item.get('assignee','')}{due}{pri}", bullet=True)
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+# ── UI ───────────────────────────────────────────
 st.title("🏛️ 수원시정연구원 G룸 에이전트")
-st.caption("회의 음성/텍스트 → 전사 → 회의록 → 맥락 분석 → 초정밀 프롬프트 → 원장 브리핑")
+st.caption("회의 녹음 → 자동 전사 → 회의록(양식) · 전사본 · 주요분석 · 초정밀 프롬프트 4종 다운로드")
 st.divider()
 
 with st.sidebar:
     st.header("⚙️ 설정")
     if GROQ_API_KEY:
         st.success("Groq API Key ✅")
-        st.caption("음성 전사 + AI 분석 모두 준비됨")
+        st.caption("음성 전사 + AI 분석 준비됨")
     else:
         st.error("Groq API Key 없음 ❌")
-        _g_in = st.text_input("Groq API 키 입력", type="password", placeholder="gsk_...")
-        if _g_in.strip():
-            GROQ_API_KEY = _g_in.strip()
+        _g = st.text_input("Groq 키 입력", type="password", placeholder="gsk_...")
+        if _g.strip():
+            GROQ_API_KEY = _g.strip()
 
     st.divider()
-    st.markdown("**파이프라인 구조**")
+    st.markdown("**산출물 4종**")
     st.markdown("""
-1. 🎙️ Whisper — 음성→텍스트
-2. 🔍 Llama 3.3 — 맥락 분석
-3. 📝 Llama 3.3 — 회의록 작성
-4. ✨ Llama 3.3 — 초정밀 프롬프트
-5. 📋 Llama 3.3 — 원장 브리핑
+① 📋 회의록 DOCX (정식 양식)
+② 📄 전사본 TXT
+③ 🔍 주요내용 분석 DOCX
+④ ✨ 초정밀 울트라 프롬프트 TXT
 """)
-    st.caption("🆓 Groq 무료 API 사용")
 
-# ──────────────────────────────────────────────
-# 입력 탭
-# ──────────────────────────────────────────────
-tab_rec, tab_file, tab_text = st.tabs(["🎙️ 실시간 녹음", "📁 파일 업로드", "📝 텍스트 입력"])
+# ── 입력 탭 ────────────────────────────────────────
+tab1, tab2, tab3 = st.tabs(["🎙️ 실시간 녹음", "📁 파일 업로드", "📝 텍스트 입력"])
 
-audio_bytes = None
-audio_ext   = "wav"
-text_input  = ""
+audio_bytes, audio_ext, text_input = None, "wav", ""
 
-with tab_rec:
-    st.markdown("🎙️ 버튼을 눌러 **녹음 시작**, 다시 눌러 **종료**하세요.")
+with tab1:
+    st.markdown("버튼을 눌러 **녹음 시작**, 다시 눌러 **종료**하세요.")
     st.caption("마이크 권한을 허용해주세요.")
-    recorded = st.audio_input("녹음하기", label_visibility="collapsed")
-    if recorded:
-        audio_bytes = recorded.read()
-        audio_ext   = "wav"
-        size_mb = len(audio_bytes) / (1024 * 1024)
-        st.success(f"녹음 완료 ({size_mb:.1f} MB)")
+    rec = st.audio_input("녹음", label_visibility="collapsed")
+    if rec:
+        audio_bytes = rec.read()
+        audio_ext = "wav"
+        mb = len(audio_bytes) / (1024*1024)
+        st.success(f"녹음 완료 ({mb:.1f} MB)")
 
-with tab_file:
-    uploaded = st.file_uploader("m4a / mp3 / wav 파일 선택", type=["m4a", "mp3", "wav"])
-    if uploaded:
-        audio_bytes = uploaded.read()
-        audio_ext   = uploaded.name.rsplit(".", 1)[-1]
+with tab2:
+    up = st.file_uploader("m4a / mp3 / wav", type=["m4a","mp3","wav"])
+    if up:
+        audio_bytes = up.read()
+        audio_ext = up.name.rsplit(".",1)[-1]
         st.audio(audio_bytes, format=f"audio/{audio_ext}")
 
-with tab_text:
+with tab3:
     text_input = st.text_area(
-        "전사 텍스트 또는 회의 내용",
-        height=200,
-        placeholder="회의 내용이나 전사 텍스트를 직접 붙여넣으세요...",
+        "텍스트",
+        height=220,
+        placeholder="전사 텍스트 또는 회의 내용을 붙여넣으세요...",
         label_visibility="collapsed",
     )
 
 st.divider()
 
-# ──────────────────────────────────────────────
-# 실행 버튼
-# ──────────────────────────────────────────────
+# ── 실행 버튼 ──────────────────────────────────────
 has_input = bool(audio_bytes) or bool(text_input.strip())
 has_key   = bool(GROQ_API_KEY)
 
 if not has_key:
-    st.error("⬅️ 사이드바에 Groq API 키를 입력해주세요.")
+    st.error("사이드바에 Groq API 키를 입력해주세요.")
 elif not has_input:
     st.info("녹음하거나 파일을 업로드하거나 텍스트를 입력해주세요.")
 
-if st.button("🚀 파이프라인 실행", disabled=not (has_input and has_key),
+if st.button("🚀 분석 시작", disabled=not (has_input and has_key),
              use_container_width=True, type="primary"):
 
-    from docx import Document
-    from docx.shared import Pt, Cm
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    outputs = {}
 
-    results = {}
-
-    # ── Step 1: 음성 전사 (Groq Whisper) ─────────────
-    with st.status("**[1/5] 음성 전사 중...**", expanded=True) as status:
+    # ── 1단계: 전사 ───────────────────────────────
+    with st.status("**[1/3] 음성 전사 중...**", expanded=True) as status:
         if audio_bytes:
             mime = "audio/mpeg" if audio_ext == "mp3" else f"audio/{audio_ext}"
             resp = requests.post(
@@ -159,210 +384,190 @@ if st.button("🚀 파이프라인 실행", disabled=not (has_input and has_key)
         else:
             transcript = text_input.strip()
             st.write(f"✓ 텍스트 입력 ({len(transcript):,}자)")
-        results["transcript"] = transcript
-        status.update(label="**[1/5] 전사 완료** ✅", state="complete")
+        outputs["transcript"] = transcript
+        status.update(label="**[1/3] 전사 완료** ✅", state="complete")
 
-    # ── Step 2: 맥락 분석 ─────────────────────────────
-    with st.status("**[2/5] 맥락 분석 중...**", expanded=True) as status:
-        raw = groq_chat(f"""수원시정연구원 정책 연구 전문가로서 아래 텍스트를 분석해 JSON으로 반환하세요.
+    time.sleep(2)
+
+    # ── 2단계: AI 분석 ────────────────────────────
+    with st.status("**[2/3] 회의 내용 분석 중...**", expanded=True) as status:
+        today = datetime.now().strftime('%Y-%m-%d')
+        raw = groq_chat(f"""당신은 수원시정연구원 전문 회의록 작성자입니다.
+아래 회의 전사 텍스트를 분석하여 정확한 JSON을 반환하세요.
 
 [전사 텍스트]
-{transcript[:4000]}
+{transcript[:5000]}
 
+다음 JSON 구조로만 응답하세요 (다른 텍스트 없이):
 {{
-  "main_topic": "핵심 주제 1문장",
-  "research_questions": ["연구질문1","연구질문2"],
-  "key_issues": ["이슈1","이슈2","이슈3"],
-  "policy_context": "정책 맥락 2-3문장",
-  "keywords": ["키워드1","키워드2","키워드3","키워드4","키워드5"],
-  "stakeholders": ["이해관계자1","이해관계자2"],
-  "region_specificity": "수원시 특수성",
-  "suggested_report_title": "보고서 제목 초안"
-}}
+  "project_name": "연구명 또는 회의 주제",
+  "meeting_date": "YYYY-MM-DD (오늘: {today})",
+  "venue": "장소 (불명확하면 수원시정연구원 G룸)",
+  "external_participants": ["외부 참석자 이름"],
+  "internal_participants": ["내부 참석자 이름"],
+  "sections": [
+    {{
+      "title": "논의 주제명",
+      "content": "세부 논의 내용 (2-4문장)",
+      "duration_estimate": null
+    }}
+  ],
+  "decisions": ["결정사항1", "결정사항2"],
+  "action_items": [
+    {{
+      "task": "해야 할 일",
+      "assignee": "담당자",
+      "due_date": "YYYY-MM-DD 또는 null",
+      "priority": "normal 또는 high"
+    }}
+  ],
+  "next_meeting": "다음 회의 일정 (없으면 null)",
+  "key_issues": ["핵심 이슈1", "핵심 이슈2", "핵심 이슈3"],
+  "keywords": ["키워드1", "키워드2", "키워드3", "키워드4", "키워드5"],
+  "summary": "회의 전체 요약 (3-5문장)"
+}}""", max_tokens=2500)
 
-JSON만 반환하세요.""")
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"): raw = raw[4:]
+        # JSON 파싱
+        clean = raw.strip()
+        if clean.startswith("```"):
+            clean = clean.split("```")[1]
+            if clean.startswith("json"): clean = clean[4:]
+            clean = clean.strip()
         try:
-            context = json.loads(raw.strip())
+            data = json.loads(clean)
         except Exception:
-            context = {"main_topic": transcript[:50], "keywords": [], "key_issues": [],
-                       "research_questions": [], "policy_context": "", "stakeholders": [],
-                       "region_specificity": "", "suggested_report_title": "정책 연구"}
-        results["context"] = context
-        st.write(f"✓ 주제: {context.get('main_topic','?')}")
-        status.update(label="**[2/5] 맥락 분석 완료** ✅", state="complete")
+            # 파싱 실패 시 기본값
+            data = {
+                "project_name": transcript[:30],
+                "meeting_date": today,
+                "venue": "수원시정연구원 G룸",
+                "external_participants": [],
+                "internal_participants": [],
+                "sections": [{"title": "회의 내용", "content": transcript[:200], "duration_estimate": None}],
+                "decisions": [],
+                "action_items": [],
+                "next_meeting": None,
+                "key_issues": [],
+                "keywords": [],
+                "summary": transcript[:200],
+            }
+
+        st.write(f"✓ 연구명: {data.get('project_name','?')}")
+        st.write(f"✓ 논의항목 {len(data.get('sections',[]))}개 · 결정사항 {len(data.get('decisions',[]))}개 · 액션아이템 {len(data.get('action_items',[]))}개")
+        outputs["analysis"] = data
+        status.update(label="**[2/3] 분석 완료** ✅", state="complete")
+
     time.sleep(2)
 
-    # ── Step 3: 회의록 작성 ───────────────────────────
-    with st.status("**[3/5] 회의록 작성 중...**", expanded=True) as status:
-        raw2 = groq_chat(f"""수원시정연구원 행정 전문가로서 아래 전사 텍스트로 공식 회의록을 JSON으로 작성하세요.
+    # ── 3단계: 초정밀 울트라 프롬프트 생성 ──────────
+    with st.status("**[3/3] 초정밀 울트라 프롬프트 생성 중...**", expanded=True) as status:
+        ultra = groq_chat(f"""당신은 세계 최고의 AI 프롬프트 엔지니어링 전문가입니다.
+아래 회의 분석 데이터를 바탕으로, 수원시정연구원 정책 연구보고서 작성을 위한
+'초정밀 울트라 프롬프트'를 한국어로 작성해주세요.
 
-[주제] {context.get('main_topic','')}
-[전사] {transcript[:4000]}
+[회의 분석 데이터]
+- 연구명: {data.get('project_name','')}
+- 핵심 이슈: {', '.join(data.get('key_issues', []))}
+- 키워드: {', '.join(data.get('keywords', []))}
+- 결정사항: {'; '.join(data.get('decisions', []))}
+- 요약: {data.get('summary','')}
 
-{{
-  "meeting_title": "회의명",
-  "date": "날짜",
-  "location": "장소 (없으면 수원시정연구원 G룸)",
-  "attendees": ["참석자1"],
-  "agenda": ["안건1","안건2"],
-  "discussion": [{{"topic":"주제1","content":["내용1","내용2"]}}],
-  "decisions": ["결정사항1"],
-  "action_items": [{{"task":"할일","owner":"담당자","due":"기한"}}],
-  "next_meeting": ""
-}}
+[초정밀 울트라 프롬프트 구성 요소]
+1. 정밀한 역할 설정 (Role Persona)
+2. 연구 배경 및 목적 설정
+3. 보고서 목차 구조 (5장 이상, 각 장 소제목 포함)
+4. 각 장별 세부 작성 지침 (분량, 포함 내용, 데이터 요구사항)
+5. 수원시 특수성 반영 방법 및 지역 데이터 활용 지침
+6. 데이터 인용·참고문헌 형식 지침
+7. 문체·형식 지침 (공문서 기준)
+8. 품질 체크리스트 (10개 항목 이상)
+9. 예상 산출물 규격 (분량, 형식 등)
 
-JSON만 반환하세요.""")
-        if raw2.startswith("```"):
-            raw2 = raw2.split("```")[1]
-            if raw2.startswith("json"): raw2 = raw2[4:]
-        try:
-            minutes_data = json.loads(raw2.strip())
-        except Exception:
-            minutes_data = {"meeting_title": context.get("main_topic","회의"),
-                            "date": datetime.now().strftime("%Y년 %m월 %d일"),
-                            "location":"수원시정연구원 G룸","attendees":[],
-                            "agenda":[],"discussion":[],"decisions":[],"action_items":[],"next_meeting":""}
+완성도 높고 즉시 사용 가능한 프롬프트를 작성해주세요.""", max_tokens=2500)
 
-        # 회의록 DOCX 생성
-        doc = Document()
-        sec = doc.sections[0]
-        sec.top_margin = sec.bottom_margin = Cm(2.5)
-        sec.left_margin = sec.right_margin = Cm(3.0)
+        outputs["ultra_prompt"] = ultra
+        st.write(f"✓ 프롬프트 생성 완료 ({len(ultra):,}자)")
+        status.update(label="**[3/3] 프롬프트 생성 완료** ✅", state="complete")
 
-        def add_para(text, bold=False, size=11, align=WD_ALIGN_PARAGRAPH.LEFT):
-            p = doc.add_paragraph()
-            p.alignment = align
-            r = p.add_run(text)
-            r.bold = bold
-            r.font.size = Pt(size)
-            r.font.name = "맑은 고딕"
-            return p
+    # ── 파일 생성 ────────────────────────────────
+    with st.spinner("파일 생성 중..."):
+        outputs["minutes_bytes"]  = make_minutes_docx(outputs["analysis"])
+        outputs["analysis_bytes"] = make_analysis_docx(outputs["analysis"])
 
-        add_para(minutes_data.get("meeting_title","회의록"), bold=True, size=16, align=WD_ALIGN_PARAGRAPH.CENTER)
-        add_para(f"일시: {minutes_data.get('date','')}  |  장소: {minutes_data.get('location','')}  |  참석자: {', '.join(minutes_data.get('attendees',[]))}", size=10)
-        doc.add_paragraph()
-        add_para("□ 안건", bold=True, size=13)
-        for item in minutes_data.get("agenda",[]): add_para(f"  ○ {item}")
-        add_para("□ 주요 논의 내용", bold=True, size=13)
-        for block in minutes_data.get("discussion",[]):
-            add_para(f"  ○ {block.get('topic','')}", bold=True)
-            for line in block.get("content",[]): add_para(f"    - {line}")
-        add_para("□ 결정사항", bold=True, size=13)
-        for item in minutes_data.get("decisions",[]): add_para(f"  ○ {item}")
-        add_para("□ 향후 조치사항", bold=True, size=13)
-        for item in minutes_data.get("action_items",[]):
-            add_para(f"  ○ {item.get('task','')} (담당: {item.get('owner','-')}, 기한: {item.get('due','-')})")
+    st.success("🎉 완료! 아래에서 4가지 파일을 다운로드하세요.")
+    st.divider()
 
-        buf = io.BytesIO()
-        doc.save(buf)
-        results["minutes_bytes"] = buf.getvalue()
-        st.write("✓ 회의록 생성 완료")
-        status.update(label="**[3/5] 회의록 완료** ✅", state="complete")
-    time.sleep(2)
+    # ── 다운로드 4종 ─────────────────────────────
+    st.markdown("### ⬇️ 다운로드")
+    c1, c2 = st.columns(2)
 
-    # ── Step 4: 초정밀 프롬프트 생성 ─────────────────
-    with st.status("**[4/5] 초정밀 프롬프트 생성 중...**", expanded=True) as status:
-        ultra_prompt = groq_chat(f"""AI 프롬프트 엔지니어링 전문가로서, 아래 맥락의 수원시정연구원 정책 보고서 작성을 위한 초정밀 프롬프트를 작성하세요.
+    with c1:
+        st.download_button(
+            "📋 ① 회의록 DOCX (정식 양식)",
+            data=outputs["minutes_bytes"],
+            file_name="회의결과보고서.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True,
+        )
+        st.download_button(
+            "🔍 ③ 주요내용 분석 DOCX",
+            data=outputs["analysis_bytes"],
+            file_name="주요내용분석.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True,
+        )
 
-주제: {context.get('main_topic','')}
-이슈: {', '.join(context.get('key_issues',[]))}
-키워드: {', '.join(context.get('keywords',[]))}
-보고서 제목: {context.get('suggested_report_title','')}
+    with c2:
+        st.download_button(
+            "📄 ② 전사본 TXT",
+            data=outputs["transcript"].encode("utf-8"),
+            file_name="전사본.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
+        st.download_button(
+            "✨ ④ 초정밀 울트라 프롬프트 TXT",
+            data=outputs["ultra_prompt"].encode("utf-8"),
+            file_name="초정밀울트라프롬프트.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
 
-포함 요소: 역할설정, 목차(5장 이상), 각 장별 작성지침, 인용방식, 수원시 특수성 반영법, 출력형식.
-프롬프트만 출력하세요.""", max_tokens=4000)
-        results["ultra_prompt"] = ultra_prompt
-        st.write(f"✓ 프롬프트 생성 완료 ({len(ultra_prompt):,}자)")
-        status.update(label="**[4/5] 프롬프트 생성 완료** ✅", state="complete")
-    time.sleep(2)
+    # ── 미리보기 탭 ──────────────────────────────
+    st.divider()
+    st.markdown("### 👁️ 결과 미리보기")
+    t1, t2, t3, t4 = st.tabs(["📋 회의 분석", "📄 전사본", "✨ 울트라 프롬프트", "🔍 원본 JSON"])
 
-    # ── Step 5: 원장 브리핑 생성 ──────────────────────
-    with st.status("**[5/5] 원장 브리핑 생성 중...**", expanded=True) as status:
-        raw3 = groq_chat(f"""수원시정연구원 연구기획 전문가로서 원장님께 보고할 1페이지 브리핑을 JSON으로 작성하세요.
+    with t1:
+        d = outputs["analysis"]
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.markdown(f"**연구명:** {d.get('project_name','')}")
+            st.markdown(f"**일시:** {d.get('meeting_date','')}  |  **장소:** {d.get('venue','')}")
+            st.markdown(f"**외부 참석자:** {', '.join(d.get('external_participants',[]))}")
+            st.markdown(f"**내부 참석자:** {', '.join(d.get('internal_participants',[]))}")
+        with col_b:
+            st.markdown(f"**키워드:** {' '.join(f'`{k}`' for k in d.get('keywords',[]))}")
+            st.markdown(f"**핵심 이슈:** {' / '.join(d.get('key_issues',[]))}")
+        st.markdown("**전체 요약**")
+        st.info(d.get('summary',''))
+        if d.get('decisions'):
+            st.markdown("**결정사항**")
+            for i, dec in enumerate(d['decisions']):
+                st.markdown(f"{i+1}. {dec}")
+        if d.get('action_items'):
+            st.markdown("**액션아이템**")
+            for item in d['action_items']:
+                pri = "🔴" if item.get('priority')=='high' else "🟡"
+                st.markdown(f"{pri} **{item.get('task','')}** — {item.get('assignee','')} ({item.get('due_date','')})")
 
-주제: {context.get('main_topic','')}
-이슈: {', '.join(context.get('key_issues',[]))}
-맥락: {context.get('policy_context','')}
+    with t2:
+        st.text_area("전사본", value=outputs["transcript"], height=300,
+                     label_visibility="collapsed")
 
-{{
-  "briefing_title": "보고 제목",
-  "overview": ["개요1","개요2"],
-  "current_status": ["현황1","현황2","현황3"],
-  "analysis": ["분석1","분석2","분석3"],
-  "recommendations": ["제언1","제언2","제언3"],
-  "schedule": ["1단계: ○○ (YYYY.MM)","2단계: ○○ (YYYY.MM)","3단계: ○○ (YYYY.MM)"]
-}}
+    with t3:
+        st.text_area("초정밀 울트라 프롬프트", value=outputs["ultra_prompt"], height=400,
+                     label_visibility="collapsed")
 
-JSON만 반환하세요.""")
-        if raw3.startswith("```"):
-            raw3 = raw3.split("```")[1]
-            if raw3.startswith("json"): raw3 = raw3[4:]
-        try:
-            bd = json.loads(raw3.strip())
-        except Exception:
-            bd = {"briefing_title":"정책 연구 보고","overview":[],"current_status":[],
-                  "analysis":[],"recommendations":[],"schedule":[]}
-
-        # 브리핑 DOCX 생성
-        doc2 = Document()
-        sec2 = doc2.sections[0]
-        sec2.top_margin = sec2.bottom_margin = Cm(2.5)
-        sec2.left_margin = sec2.right_margin = Cm(3.0)
-
-        def add2(text, bold=False, size=11, align=WD_ALIGN_PARAGRAPH.LEFT):
-            p = doc2.add_paragraph()
-            p.alignment = align
-            r = p.add_run(text)
-            r.bold = bold
-            r.font.size = Pt(size)
-            r.font.name = "맑은 고딕"
-
-        add2(bd.get("briefing_title","정책 연구 보고"), bold=True, size=16, align=WD_ALIGN_PARAGRAPH.CENTER)
-        add2(datetime.now().strftime("%Y년 %m월 %d일  수원시정연구원"), size=10, align=WD_ALIGN_PARAGRAPH.CENTER)
-        doc2.add_paragraph("─" * 40)
-        for section_title, key in [("□ 보고 개요","overview"),("□ 핵심 현황","current_status"),
-                                    ("□ 주요 분석 방향","analysis"),("□ 정책 제언","recommendations")]:
-            add2(section_title, bold=True, size=13)
-            for item in bd.get(key,[]): add2(f"  ○ {item}")
-        add2("□ 향후 추진 일정", bold=True, size=13)
-        for item in bd.get("schedule",[]): add2(f"  - {item}")
-
-        buf2 = io.BytesIO()
-        doc2.save(buf2)
-        results["briefing_bytes"] = buf2.getvalue()
-        results["briefing_title"] = bd.get("briefing_title","원장브리핑")
-        status.update(label="**[5/5] 원장 브리핑 완료** ✅", state="complete")
-
-    st.success("🎉 파이프라인 완료!")
-
-    # ── 결과 탭 ───────────────────────────────────
-    r1, r2, r3, r4 = st.tabs(["📋 맥락 분석", "✨ 초정밀 프롬프트", "📝 전사 텍스트", "⬇️ 다운로드"])
-
-    with r1:
-        st.json(results["context"])
-
-    with r2:
-        st.text_area("Ultra Prompt", value=results["ultra_prompt"],
-                     height=400, label_visibility="collapsed")
-
-    with r3:
-        st.text_area("전사 텍스트", value=results["transcript"],
-                     height=300, label_visibility="collapsed")
-
-    with r4:
-        st.markdown("### 파일 다운로드")
-        st.download_button("📄 전사본 TXT", data=results["transcript"].encode("utf-8"),
-                           file_name="전사본.txt", mime="text/plain", use_container_width=True)
-        st.markdown("")
-        st.download_button("📝 회의록 DOCX", data=results["minutes_bytes"],
-                           file_name="회의록.docx",
-                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                           use_container_width=True)
-        st.markdown("")
-        st.download_button("📋 원장 브리핑 DOCX", data=results["briefing_bytes"],
-                           file_name="원장브리핑.docx",
-                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                           use_container_width=True)
+    with t4:
+        st.json(outputs["analysis"])
