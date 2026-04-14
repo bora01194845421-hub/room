@@ -28,6 +28,66 @@ except Exception:
 GROQ_LLM_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL   = "llama-3.3-70b-versatile"
 
+def transcribe_realtime_chunks(audio_bytes, placeholder):
+    """30초 청크 단위 순차 전사 — 텍스트가 실시간으로 쌓임 (Groq Whisper)"""
+    import wave
+
+    # WAV 파일을 30초씩 분할
+    chunks = []
+    try:
+        buf = io.BytesIO(audio_bytes)
+        with wave.open(buf, 'rb') as wf:
+            fr = wf.getframerate()
+            nc = wf.getnchannels()
+            sw = wf.getsampwidth()
+            chunk_frames = fr * 30  # 30초
+            while True:
+                frames = wf.readframes(chunk_frames)
+                if not frames:
+                    break
+                cb = io.BytesIO()
+                with wave.open(cb, 'wb') as cw:
+                    cw.setnchannels(nc)
+                    cw.setsampwidth(sw)
+                    cw.setframerate(fr)
+                    cw.writeframes(frames)
+                chunks.append(cb.getvalue())
+    except Exception:
+        chunks = [audio_bytes]  # 분할 실패 시 전체를 한 번에 처리
+
+    full_text = ""
+    total = len(chunks)
+
+    for i, chunk in enumerate(chunks):
+        placeholder.text_area(
+            f"전사 진행 중... ({i}/{total} 구간 완료)",
+            value=full_text + "\n⏳ 처리 중...",
+            height=280,
+            label_visibility="collapsed",
+        )
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/audio/transcriptions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+            files={"file": (f"chunk.wav", chunk, "audio/wav")},
+            data={"model": "whisper-large-v3", "language": "ko",
+                  "response_format": "text"},
+            timeout=120,
+        )
+        if resp.status_code == 200:
+            full_text += resp.text.strip() + " "
+        else:
+            full_text += f"[구간 {i+1} 오류] "
+
+        placeholder.text_area(
+            f"전사 진행 중... ({i+1}/{total} 구간 완료)",
+            value=full_text,
+            height=280,
+            label_visibility="collapsed",
+        )
+
+    return full_text.strip()
+
+
 def transcribe_assemblyai(audio_bytes, st_status):
     """AssemblyAI 고정밀 한국어 전사 (화자 구분 포함)"""
     headers = {"authorization": AAI_KEY}
@@ -370,23 +430,26 @@ with st.sidebar:
 # ── 입력 탭 ────────────────────────────────────────
 tab1, tab2, tab3 = st.tabs(["🎙️ 실시간 녹음", "📁 파일 업로드", "📝 텍스트 입력"])
 
-audio_bytes, audio_ext, text_input = None, "wav", ""
+audio_bytes, audio_ext, text_input, audio_source = None, "wav", "", None
 
 with tab1:
     st.markdown("버튼을 눌러 **녹음 시작**, 다시 눌러 **종료**하세요.")
-    st.caption("마이크 권한을 허용해주세요.")
+    st.caption("🔴 녹음 종료 후 전사 텍스트가 **30초 단위로 순서대로** 표시됩니다.")
     rec = st.audio_input("녹음", label_visibility="collapsed")
     if rec:
         audio_bytes = rec.read()
         audio_ext = "wav"
+        audio_source = "rec"
         mb = len(audio_bytes) / (1024*1024)
-        st.success(f"녹음 완료 ({mb:.1f} MB)")
+        st.success(f"녹음 완료 ({mb:.1f} MB) — 아래 실행 버튼을 누르세요!")
 
 with tab2:
+    st.caption("📁 파일 업로드 시 AssemblyAI 고정밀 전사 (화자 구분 포함)")
     up = st.file_uploader("m4a / mp3 / wav", type=["m4a","mp3","wav"])
     if up:
         audio_bytes = up.read()
         audio_ext = up.name.rsplit(".",1)[-1]
+        audio_source = "file"
         st.audio(audio_bytes, format=f"audio/{audio_ext}")
 
 with tab3:
@@ -413,15 +476,27 @@ if st.button("🚀 분석 시작", disabled=not (has_input and has_key),
 
     outputs = {}
 
-    # ── 1단계: 전사 (AssemblyAI) ──────────────────
+    # ── 1단계: 전사 ────────────────────────────────
     with st.status("**[1/3] 음성 전사 중...**", expanded=True) as status:
         if audio_bytes:
-            try:
-                transcript = transcribe_assemblyai(audio_bytes, status)
-                st.write(f"✓ 전사 완료 ({len(transcript):,}자)")
-            except Exception as e:
-                st.error(f"전사 오류: {e}")
-                st.stop()
+            if audio_source == "rec":
+                # 실시간 녹음: 30초 청크로 분할 → 텍스트 순차 표시
+                status.write("🎙️ **실시간 전사** — 30초 단위로 텍스트가 순서대로 표시됩니다")
+                preview = st.empty()
+                try:
+                    transcript = transcribe_realtime_chunks(audio_bytes, preview)
+                except Exception as e:
+                    st.error(f"전사 오류: {e}")
+                    st.stop()
+            else:
+                # 파일 업로드: AssemblyAI 고정밀 전사
+                status.write("📁 **AssemblyAI 고정밀 전사** — 화자 구분 포함")
+                try:
+                    transcript = transcribe_assemblyai(audio_bytes, status)
+                except Exception as e:
+                    st.error(f"전사 오류: {e}")
+                    st.stop()
+            st.write(f"✓ 전사 완료 ({len(transcript):,}자)")
         else:
             transcript = text_input.strip()
             st.write(f"✓ 텍스트 입력 ({len(transcript):,}자)")
