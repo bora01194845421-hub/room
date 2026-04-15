@@ -475,7 +475,8 @@ elif not has_input:
 if st.button("🚀 분석 시작", disabled=not (has_input and has_key),
              use_container_width=True, type="primary"):
 
-    outputs = {}
+    st.session_state.outputs = {}
+    outputs = st.session_state.outputs
 
     # ── 1단계: 전사 ────────────────────────────────
     if audio_bytes and audio_source == "rec":
@@ -607,12 +608,17 @@ if st.button("🚀 분석 시작", disabled=not (has_input and has_key),
         st.write(f"✓ 프롬프트 생성 완료 ({len(ultra):,}자)")
         status.update(label="**[3/3] 프롬프트 생성 완료** ✅", state="complete")
 
-    # ── 파일 생성 ────────────────────────────────
+    # ── 파일 생성 후 session_state에 저장 ────────
     with st.spinner("파일 생성 중..."):
         outputs["minutes_bytes"]  = make_minutes_docx(outputs["analysis"])
         outputs["analysis_bytes"] = make_analysis_docx(outputs["analysis"])
+    st.session_state.outputs = outputs
 
-    st.success("🎉 완료! 아래에서 원하는 파일을 다운로드하세요.")
+# ── 분석 결과가 있으면 항상 표시 ──────────────────
+if "outputs" in st.session_state and st.session_state.outputs.get("transcript"):
+    outputs = st.session_state.outputs
+
+    st.success("🎉 완료! 원하는 파일을 선택해서 다운로드하세요.")
     st.divider()
 
     # ── 다운로드 4종 ─────────────────────────────
