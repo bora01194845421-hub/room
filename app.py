@@ -477,31 +477,32 @@ if st.button("🚀 분석 시작", disabled=not (has_input and has_key),
     outputs = {}
 
     # ── 1단계: 전사 ────────────────────────────────
-    with st.status("**[1/3] 음성 전사 중...**", expanded=True) as status:
-        if audio_bytes:
-            if audio_source == "rec":
-                # 실시간 녹음: 30초 청크로 분할 → 텍스트 순차 표시
-                status.write("🎙️ **실시간 전사** — 30초 단위로 텍스트가 순서대로 표시됩니다")
-                preview = st.empty()
-                try:
-                    transcript = transcribe_realtime_chunks(audio_bytes, preview)
-                except Exception as e:
-                    st.error(f"전사 오류: {e}")
-                    st.stop()
-            else:
-                # 파일 업로드: AssemblyAI 고정밀 전사
-                status.write("📁 **AssemblyAI 고정밀 전사** — 화자 구분 포함")
-                try:
-                    transcript = transcribe_assemblyai(audio_bytes, status)
-                except Exception as e:
-                    st.error(f"전사 오류: {e}")
-                    st.stop()
+    if audio_bytes and audio_source == "rec":
+        st.markdown("#### 🎙️ 전사 진행 중...")
+        st.caption("30초 단위로 텍스트가 순서대로 쌓입니다. 완료까지 기다려주세요.")
+        preview = st.empty()
+        try:
+            transcript = transcribe_realtime_chunks(audio_bytes, preview)
+            preview.text_area("📄 전사 완료", value=transcript, height=300,
+                              label_visibility="visible")
+        except Exception as e:
+            st.error(f"전사 오류: {e}")
+            st.stop()
+        st.success(f"✅ 전사 완료 ({len(transcript):,}자)")
+    elif audio_bytes and audio_source == "file":
+        with st.status("**[1/3] AssemblyAI 고정밀 전사 중...**", expanded=True) as status:
+            try:
+                transcript = transcribe_assemblyai(audio_bytes, status)
+            except Exception as e:
+                st.error(f"전사 오류: {e}")
+                st.stop()
             st.write(f"✓ 전사 완료 ({len(transcript):,}자)")
-        else:
-            transcript = text_input.strip()
-            st.write(f"✓ 텍스트 입력 ({len(transcript):,}자)")
-        outputs["transcript"] = transcript
-        status.update(label="**[1/3] 전사 완료** ✅", state="complete")
+            status.update(label="**[1/3] 전사 완료** ✅", state="complete")
+    else:
+        transcript = text_input.strip()
+        st.info(f"✓ 텍스트 입력 ({len(transcript):,}자)")
+
+    outputs["transcript"] = transcript
 
     time.sleep(2)
 
