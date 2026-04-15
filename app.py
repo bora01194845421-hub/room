@@ -612,63 +612,48 @@ if st.button("🚀 분석 시작", disabled=not (has_input and has_key),
         outputs["minutes_bytes"]  = make_minutes_docx(outputs["analysis"])
         outputs["analysis_bytes"] = make_analysis_docx(outputs["analysis"])
 
-    st.success("🎉 완료! 아래에서 파일을 다운로드하세요.")
+    st.success("🎉 완료! 아래에서 원하는 파일을 다운로드하세요.")
     st.divider()
 
-    # ── ZIP 한 번에 다운로드 ──────────────────────
-    import zipfile
+    # ── 다운로드 4종 ─────────────────────────────
     st.markdown("### ⬇️ 다운로드")
-    zip_buf = io.BytesIO()
-    meeting_date = outputs["analysis"].get("meeting_date", datetime.now().strftime("%Y%m%d"))[:10].replace("-", "")
-    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("회의결과보고서.docx", outputs["minutes_bytes"])
-        zf.writestr("전사본.txt", outputs["transcript"].encode("utf-8"))
-        zf.writestr("주요내용분석.docx", outputs["analysis_bytes"])
-        zf.writestr("초정밀울트라프롬프트.txt", outputs["ultra_prompt"].encode("utf-8"))
-    zip_buf.seek(0)
-
-    st.download_button(
-        "📦 4개 파일 한 번에 다운로드 (ZIP)",
-        data=zip_buf.getvalue(),
-        file_name=f"수원ON룸_{meeting_date}.zip",
-        mime="application/zip",
-        use_container_width=True,
-        type="primary",
-    )
-
-    st.markdown("##### 개별 다운로드")
-    c1, c2 = st.columns(2)
+    c1, c2, c3, c4 = st.columns(4)
 
     with c1:
         st.download_button(
-            "📋 ① 회의록 DOCX (정식 양식)",
+            "📋 회의록\n(정식 양식)",
             data=outputs["minutes_bytes"],
             file_name="회의결과보고서.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             use_container_width=True,
+            type="primary",
         )
-        st.download_button(
-            "🔍 ③ 주요내용 분석 DOCX",
-            data=outputs["analysis_bytes"],
-            file_name="주요내용분석.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            use_container_width=True,
-        )
-
     with c2:
         st.download_button(
-            "📄 ② 전사본 TXT",
+            "📄 전사본",
             data=outputs["transcript"].encode("utf-8"),
             file_name="전사본.txt",
             mime="text/plain",
             use_container_width=True,
+            type="primary",
         )
+    with c3:
         st.download_button(
-            "✨ ④ 초정밀 울트라 프롬프트 TXT",
+            "🔍 주요내용\n분석",
+            data=outputs["analysis_bytes"],
+            file_name="주요내용분석.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True,
+            type="primary",
+        )
+    with c4:
+        st.download_button(
+            "✨ 초정밀\n울트라 프롬프트",
             data=outputs["ultra_prompt"].encode("utf-8"),
             file_name="초정밀울트라프롬프트.txt",
             mime="text/plain",
             use_container_width=True,
+            type="primary",
         )
 
     # ── 미리보기 탭 ──────────────────────────────
