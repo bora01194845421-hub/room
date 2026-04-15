@@ -113,6 +113,7 @@ def transcribe_assemblyai(audio_bytes, st_status):
             "punctuate": True,
             "format_text": True,
             "speaker_labels": True,
+            "speech_model": "universal-2",
         },
         timeout=30
     )
