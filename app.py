@@ -612,11 +612,31 @@ if st.button("🚀 분석 시작", disabled=not (has_input and has_key),
         outputs["minutes_bytes"]  = make_minutes_docx(outputs["analysis"])
         outputs["analysis_bytes"] = make_analysis_docx(outputs["analysis"])
 
-    st.success("🎉 완료! 아래에서 4가지 파일을 다운로드하세요.")
+    st.success("🎉 완료! 아래에서 파일을 다운로드하세요.")
     st.divider()
 
-    # ── 다운로드 4종 ─────────────────────────────
+    # ── ZIP 한 번에 다운로드 ──────────────────────
+    import zipfile
     st.markdown("### ⬇️ 다운로드")
+    zip_buf = io.BytesIO()
+    meeting_date = outputs["analysis"].get("meeting_date", datetime.now().strftime("%Y%m%d"))[:10].replace("-", "")
+    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("회의결과보고서.docx", outputs["minutes_bytes"])
+        zf.writestr("전사본.txt", outputs["transcript"].encode("utf-8"))
+        zf.writestr("주요내용분석.docx", outputs["analysis_bytes"])
+        zf.writestr("초정밀울트라프롬프트.txt", outputs["ultra_prompt"].encode("utf-8"))
+    zip_buf.seek(0)
+
+    st.download_button(
+        "📦 4개 파일 한 번에 다운로드 (ZIP)",
+        data=zip_buf.getvalue(),
+        file_name=f"수원ON룸_{meeting_date}.zip",
+        mime="application/zip",
+        use_container_width=True,
+        type="primary",
+    )
+
+    st.markdown("##### 개별 다운로드")
     c1, c2 = st.columns(2)
 
     with c1:
