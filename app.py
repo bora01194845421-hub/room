@@ -1,5 +1,5 @@
 """
-G룸 에이전트 v2.0 | 수원시정연구원
+수원 ON 룸 v2.0 | 수원시정연구원
 회의 녹음/텍스트 → 4가지 산출물 자동 생성
 """
 import sys, os, io, json, time, requests
@@ -9,7 +9,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 st.set_page_config(
-    page_title="G룸 에이전트 | 수원시정연구원",
+    page_title="수원 ON 룸 | 수원시정연구원",
     page_icon="🏛️",
     layout="wide",
 )
@@ -407,8 +407,8 @@ def make_analysis_docx(data):
     return buf.getvalue()
 
 # ── UI ───────────────────────────────────────────
-st.title("🏛️ 수원시정연구원 G룸 에이전트")
-st.caption("회의 녹음 → 자동 전사 → 회의록(양식) · 전사본 · 주요분석 · 초정밀 프롬프트 4종 다운로드")
+st.title("🏛️ 수원 ON 룸")
+st.caption("수원의 모든 아이디어를 켜다 | 회의 녹음 → 자동 전사 → 회의록(양식) · 전사본 · 주요분석 · 초정밀 프롬프트 4종 다운로드")
 st.divider()
 
 with st.sidebar:
