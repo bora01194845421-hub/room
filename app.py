@@ -88,15 +88,28 @@ def transcribe_realtime_chunks(audio_bytes, placeholder):
     return full_text.strip()
 
 
+def detect_audio_mime(audio_bytes):
+    """오디오 바이트에서 MIME 타입 자동 감지"""
+    h = audio_bytes[:12]
+    if h[:4] == b'RIFF':                      return "audio/wav"
+    if h[:4] == b'OggS':                      return "audio/ogg"
+    if h[:3] == b'ID3' or h[:2] == b'\xff\xfb': return "audio/mpeg"
+    if h[4:8] == b'ftyp':                     return "audio/mp4"
+    if h[:4] == b'\x1a\x45\xdf\xa3':         return "audio/webm"
+    if h[:4] == b'fLaC':                      return "audio/flac"
+    return "audio/webm"  # 브라우저 녹음 기본값
+
 def transcribe_assemblyai(audio_bytes, st_status):
     """AssemblyAI 고정밀 한국어 전사 (화자 구분 포함)"""
     headers = {"authorization": AAI_KEY}
 
     # 1) 오디오 업로드
-    st_status.write("📤 오디오 업로드 중... (파일 크기에 따라 수분 소요)")
+    mime = detect_audio_mime(audio_bytes)
+    st_status.write(f"📤 오디오 업로드 중... ({mime}, {len(audio_bytes)/1024/1024:.1f}MB)")
     up = requests.post(
         "https://api.assemblyai.com/v2/upload",
-        headers=headers, data=audio_bytes, timeout=600
+        headers={**headers, "Content-Type": mime},
+        data=audio_bytes, timeout=600
     )
     if up.status_code != 200:
         raise Exception(f"업로드 오류: {up.text[:200]}")
@@ -478,40 +491,16 @@ if st.button("🚀 분석 시작", disabled=not (has_input and has_key),
     st.session_state.outputs = {}
     outputs = st.session_state.outputs
 
-    # ── 1단계: 전사 ────────────────────────────────
-    if audio_bytes and audio_source == "rec":
-        # 20분(1200초) 초과 → AssemblyAI 고정밀 전사로 자동 전환
-        est_seconds = len(audio_bytes) / 32000  # 대략적인 길이 추정
-        if est_seconds > 1200:
-            st.markdown("#### 🎙️ 장시간 녹음 감지 — AssemblyAI 고정밀 전사로 처리합니다")
-            st.caption(f"약 {int(est_seconds/60)}분 분량 · 처리 시간이 다소 소요됩니다.")
-            with st.status("전사 중...", expanded=True) as sts:
-                try:
-                    transcript = transcribe_assemblyai(audio_bytes, sts)
-                except Exception as e:
-                    st.error(f"전사 오류: {e}")
-                    st.stop()
-                sts.update(label="전사 완료 ✅", state="complete")
-        else:
-            st.markdown("#### 🎙️ 전사 진행 중...")
-            st.caption("30초 단위로 텍스트가 순서대로 쌓입니다. 완료까지 기다려주세요.")
-            preview = st.empty()
-            try:
-                transcript = transcribe_realtime_chunks(audio_bytes, preview)
-                preview.text_area("📄 전사 완료", value=transcript, height=300,
-                                  label_visibility="visible")
-            except Exception as e:
-                st.error(f"전사 오류: {e}")
-                st.stop()
-        st.success(f"✅ 전사 완료 ({len(transcript):,}자)")
-    elif audio_bytes and audio_source == "file":
-        with st.status("**[1/3] AssemblyAI 고정밀 전사 중...**", expanded=True) as status:
+    # ── 1단계: 전사 (녹음/파일 모두 AssemblyAI 고정밀 전사) ──
+    if audio_bytes:
+        with st.status("**[1/3] 전사 중...**", expanded=True) as status:
             try:
                 transcript = transcribe_assemblyai(audio_bytes, status)
             except Exception as e:
                 st.error(f"전사 오류: {e}")
                 st.stop()
             st.write(f"✓ 전사 완료 ({len(transcript):,}자)")
+            status.update(label="**[1/3] 전사 완료** ✅", state="complete")
             status.update(label="**[1/3] 전사 완료** ✅", state="complete")
     else:
         transcript = text_input.strip()
